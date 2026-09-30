@@ -9,11 +9,12 @@
 # 三个 job 各司其职，权限互不重叠：
 #   build   → 装字体 + 编译 PDF（增量）+ 生成导航页 + 上传产物   （contents: read）
 #   deploy  → 把 build/ 目录发布到 GitHub Pages                 （pages/id-token: write）
-#   release → 自动生成版本号并创建 Release，附上全部 PDF          （contents: write）
+#   release → 按日期发版并创建 Release，附上全部 PDF             （contents: write）
 #
-# 你不需要手动打 tag：每次推送到 main 且构建成功后，release job 会自动
-# 把「最新的 vX.Y.Z」的 patch 号 +1（没有则从 v1.0.0 开始）并创建 Release。
-# 想指定版本号时，手动打 tag 推送即可（例如 v2.0.0），release job 会直接用它。
+# 你不需要手动打 tag：每次推送到 main 且构建成功后，release job 会用
+# 当天日期（默认 Asia/Shanghai，见 RELEASE_TZ）创建/更新 Release，例如 v2026.09.30。
+# 同一天多次 push 只刷新这一个 Release 的 PDF，不会新增 tag；跨天自动新建。
+# 想额外留一个正式快照时，手动打 tag 推送即可（例如 v2.0.0）。
 # =============================================================================
 
 name: Build & Deploy Slides
@@ -31,6 +32,8 @@ env:
   TYPST_VERSION: "0.15.1"
   # 编译产物目录（Pages 站点根目录）
   BUILD_DIR: build
+  # 按日期发版时用哪个时区决定 tag 里的日期（想用 UTC 就写 UTC）
+  RELEASE_TZ: "Asia/Shanghai"
   # push 事件的「上一次提交」，用于判断哪些幻灯片需要重新编译；
   # 其它事件（手动运行 / tag / release）取不到，会走全量编译。
   BEFORE_SHA: ${{ github.event.before }}
@@ -279,7 +282,7 @@ jobs:
         uses: actions/deploy-pages@v5
 
   # ---------------------------------------------------------------------------
-  # 3) 自动发版本：算出版本号 → 创建/更新 Release → 把 PDF 全部传上去
+  # 3) 按日期发版：算出当天的 tag → 创建/更新 Release → 把 PDF 全部传上去
   # ---------------------------------------------------------------------------
   release:
     name: 自动发版本并上传 PDF
@@ -299,8 +302,9 @@ jobs:
       contents: write # 创建 tag / Release 并上传附件
     steps:
       # tag 规则：
-      #   * main 推送        → 滚动发布：固定 tag `latest`，覆盖它里面的 PDF（tag 数量恒定为 1）
-      #   * 手动推送 v* tag   → 用该 tag 建一个正式的版本化 Release（与 latest 共存）
+      #   * main 推送        → 按日期命名，例如 v2026.09.30；
+      #                        同一天再 push 只更新这个 Release 的附件，不会新增 tag
+      #   * 手动推送 v* tag   → 用该 tag 建一个额外的版本化 Release（与你手动的 tag 同名）
       #   * release 事件      → 只给那个 Release 补附件，不动说明
       - name: 计算 tag
         id: version
@@ -311,7 +315,7 @@ jobs:
           set -euo pipefail
 
           tag=""
-          rolling=false
+          managed=false
 
           if [ "${GITHUB_EVENT_NAME}" = "release" ] && [ -n "${RELEASE_TAG}" ]; then
             tag="${RELEASE_TAG}"
@@ -320,15 +324,15 @@ jobs:
             tag="${GITHUB_REF_NAME}"
             echo "使用本次推送的 tag：${tag}"
           else
-            # 日常 push：更新同一个滚动 Release，不新增 tag
-            tag="latest"
-            rolling=true
-            echo "滚动发布：把 PDF 更新到 ${tag} Release"
+            # 日常 push：按日期命名，同一天只维护一个 Release
+            tag="v$(TZ="${RELEASE_TZ}" date +%Y.%m.%d)"
+            managed=true
+            echo "按日期发版：${tag}（同一天的多次 push 只更新这一个 Release）"
           fi
 
           # 该 Release 是否已存在：
           #   false → 本次新建，可以写一份自动说明
-          #   true  → 已存在；滚动发布刷新说明，版本化 Release 只补附件
+          #   true  → 已存在；当天再次 push 时刷新说明，其它版本化 Release 只补附件
           if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             exists=true
           else
@@ -338,7 +342,7 @@ jobs:
 
           {
             echo "tag=${tag}"
-            echo "rolling=${rolling}"
+            echo "managed=${managed}"
             echo "exists=${exists}"
           } >> "$GITHUB_OUTPUT"
 
@@ -348,20 +352,20 @@ jobs:
           name: slides-build
           path: ${{ env.BUILD_DIR }}
 
-      # 生成说明：滚动的 latest Release 每次都刷新；
-      # 版本化 Release 只在新建时写一次，已存在时绝不动你手写的说明。
+      # 生成说明：按日期维护的那个 Release 每次都刷新；
+      # 其它版本化 Release 只在新建时写一次，已存在时绝不动你手写的说明。
       - name: 生成 Release 说明
-        if: steps.version.outputs.rolling == 'true' || steps.version.outputs.exists == 'false'
+        if: steps.version.outputs.managed == 'true' || steps.version.outputs.exists == 'false'
         env:
           TAG: ${{ steps.version.outputs.tag }}
-          ROLLING: ${{ steps.version.outputs.rolling }}
+          MANAGED: ${{ steps.version.outputs.managed }}
         run: |
           set -euo pipefail
           site="https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}"
 
           {
-            if [ "${ROLLING}" = "true" ]; then
-              echo "🔄 **这是自动滚动更新的最新版**：每次 push 到 \`main\` 都会把下面的 PDF 换成最新编译结果，本 Release 的 tag 固定为 \`${TAG}\`。"
+            if [ "${MANAGED}" = "true" ]; then
+              echo "📅 **本 Release 按日期维护（\`${TAG}\`）**：同一天的多次 push 会刷新下面的 PDF；跨天后会自动新建一个日期版本。"
               echo
             fi
             echo "包含以下幻灯片（左侧链接在线预览，右侧链接直接下载）："
@@ -379,9 +383,9 @@ jobs:
 
           cat "$RUNNER_TEMP/release-notes.md"
 
-      # 滚动 latest（覆盖附件 + 刷新说明）或新建版本化 Release
-      - name: 发布（滚动 latest / 新建版本化 Release）
-        if: steps.version.outputs.rolling == 'true' || steps.version.outputs.exists == 'false'
+      # 当天/新建的 Release：覆盖附件并刷新说明
+      - name: 发布（日期 Release / 新建版本化 Release）
+        if: steps.version.outputs.managed == 'true' || steps.version.outputs.exists == 'false'
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.version.outputs.tag }}
@@ -389,13 +393,13 @@ jobs:
           target_commitish: ${{ github.sha }}
           body_path: ${{ runner.temp }}/release-notes.md
           files: ${{ env.BUILD_DIR }}/*.pdf
-          # 同名附件直接覆盖，滚动 Release 就是这样保持最新的
+          # 同名附件直接覆盖，同一天的多次 push 就是这样保持最新的
           overwrite_files: true
           fail_on_unmatched_files: true
 
-      # 已经存在的版本化 Release（例如从网页发布）：只补/覆盖附件，不传 body
+      # 已经存在的其它版本化 Release（例如从网页发布）：只补/覆盖附件，不传 body
       - name: 只更新已有版本化 Release 的附件
-        if: steps.version.outputs.rolling == 'false' && steps.version.outputs.exists == 'true'
+        if: steps.version.outputs.managed == 'false' && steps.version.outputs.exists == 'true'
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.version.outputs.tag }}

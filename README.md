@@ -6,7 +6,7 @@
 1. 安装模板里用到的字体（Noto Sans CJK SC / Inter）；
 2. 编译 `slides/*/main.typ` 为 PDF（只重编改动过的幻灯片）；
 3. 生成导航页并部署到 **GitHub Pages**；
-4. **同步到一个永远最新的 Release**：所有 PDF 覆盖到 tag 为 `latest` 的 Release，不需要打 tag 或写版本号。
+4. **按日期发版**：用当天日期（如 `v2026.09.30`）创建/更新 Release，附上全部 PDF，不需要打 tag 或写版本号。
 
 ## 访问地址
 
@@ -15,7 +15,7 @@
 | 首页（自动生成的导航页） | <https://tortrixx.github.io/slides/> |
 | 单套幻灯片 | `https://tortrixx.github.io/slides/<文件夹名>.pdf` |
 | 例如 | <https://tortrixx.github.io/slides/intro.pdf> |
-| 固定下载地址（永远最新版） | `https://github.com/tortrixx/slides/releases/download/latest/<文件夹名>.pdf` |
+| 固定下载地址（永远最新） | `https://github.com/tortrixx/slides/releases/latest/download/<文件夹名>.pdf` |
 
 > 文件名就是 `slides/` 下的文件夹名。`slides/intro/` 编译出来就是 `.../slides/intro.pdf`。
 
@@ -145,48 +145,60 @@ typst watch main.typ          # 保存即自动重新编译
 安装 Typst：`brew install typst`（macOS）或见 <https://github.com/typst/typst#installation>。
 本地版本建议与工作流中的 `TYPST_VERSION` 保持一致（当前为 `0.15.1`）。
 
-## 发版策略：一个永远最新的 Release（tag 数量恒定）
+## 发版策略：按日期命名，一天一个 Release
 
-日常写完幻灯片 `git push` 就够了：**不打 tag、不写说明、版本号也不用管**。
-所有 PDF 会覆盖到同一个 tag 为 `latest` 的 Release 里，所以 **tag / Release 数量恒定，
-不会随 push 次数增长**，也不会反复给 watch 了 Releases 的人发通知。
+日常写完幻灯片 `git push` 就够了：**不打 tag、不写说明、不用管版本号**。
+release job 会用当天的日期（默认 `Asia/Shanghai`，见 workflow 顶部的 `RELEASE_TZ`）
+创建或更新 Release，例如 `v2026.09.30`。
 
 | 你的操作 | 结果 |
 | --- | --- |
-| push 到 `main` | Pages 更新 + 把全部 PDF 覆盖到 `latest` Release（说明同步刷新） |
-| 手动 `git tag v2.0.0 && git push origin v2.0.0` | 额外建一个版本化 Release（与 `latest` 共存），用于正式快照 |
+| 今天第一次 push | 新建 `v2026.09.30`，附上全部 PDF |
+| 今天再 push | 只刷新 `v2026.09.30` 里的 PDF，**不会**新增 tag / Release |
+| 明天 push | 新建 `v2026.10.01` |
+| 手动 `git tag v2.0.0 && git push origin v2.0.0` | 额外建一个 `v2.0.0` 的正式 Release |
 | 在网页上编辑 / 发布 Release | 只把最新 PDF 补传到该 Release，**不动**你写的说明 |
 
-**固定的下载地址**（永远指向最新版，适合直接发给别人）：
+所以 tag 数量 ≈ **有 push 的天数**，而不是 push 次数：一天推 10 次也只有一个 tag。
+
+同一天的 tag 指向当天**第一次** push 的提交，而附件是当天**最新**的编译结果。这是刻意的：
+移动已存在的 tag 会让别人的 `git fetch --tags` 报 `would clobber existing tag`，得不偿失。
+
+**稳定下载地址**（GitHub 会把它指向最新的那个 Release，也就是最近的日期版本）：
 
 ```
-https://github.com/tortrixx/slides/releases/download/latest/intro.pdf
-https://github.com/tortrixx/slides/releases/download/latest/example.pdf
-https://github.com/tortrixx/slides/releases/download/latest/26-09-30.pdf
+https://github.com/tortrixx/slides/releases/latest/download/intro.pdf
+https://github.com/tortrixx/slides/releases/latest/download/example.pdf
+https://github.com/tortrixx/slides/releases/latest/download/26-09-30.pdf
 ```
 
-> 注意：GitHub 的 `…/releases/latest/download/…` 指向「被标记为 Latest 的那个 Release」。
-> 如果你后来发了版本化 Release（例如 `v2.0.0`），Latest 标记可能移到它身上。
-> 想永远指向最新编译结果，请用上面带 `latest` tag 的地址。
+指定某一天：
 
-`latest` Release 的说明由工作流每次自动刷新（因为它是工作流自己维护的）：
+```
+https://github.com/tortrixx/slides/releases/download/v2026.09.30/intro.pdf
+```
+
+> 注意：`…/releases/latest/…` 指向「被标记为 Latest 的那个 Release」。如果你手动发了
+> `v2.0.0` 这类版本化 Release，Latest 标记会移到它身上。需要长期锚定某一天时，用具体日期 tag 的地址。
+
+按日期维护的 Release，说明由工作流每次自动刷新（因为它是工作流自己维护的）：
 
 ```markdown
-🔄 **这是自动滚动更新的最新版**：每次 push 到 `main` 都会把下面的 PDF 换成最新编译结果，
-本 Release 的 tag 固定为 `latest`。
+📅 **本 Release 按日期维护（`v2026.09.30`）**：同一天的多次 push 会刷新下面的 PDF；
+跨天后会自动新建一个日期版本。
 
 包含以下幻灯片（左侧链接在线预览，右侧链接直接下载）：
 
-- [`26-09-30.pdf`](https://tortrixx.github.io/slides/26-09-30.pdf) · [下载](https://github.com/tortrixx/slides/releases/download/latest/26-09-30.pdf)
-- [`example.pdf`](https://tortrixx.github.io/slides/example.pdf) · [下载](https://github.com/tortrixx/slides/releases/download/latest/example.pdf)
-- [`intro.pdf`](https://tortrixx.github.io/slides/intro.pdf) · [下载](https://github.com/tortrixx/slides/releases/download/latest/intro.pdf)
+- [`26-09-30.pdf`](https://tortrixx.github.io/slides/26-09-30.pdf) · [下载](https://github.com/tortrixx/slides/releases/download/v2026.09.30/26-09-30.pdf)
+- [`example.pdf`](https://tortrixx.github.io/slides/example.pdf) · [下载](https://github.com/tortrixx/slides/releases/download/v2026.09.30/example.pdf)
+- [`intro.pdf`](https://tortrixx.github.io/slides/intro.pdf) · [下载](https://github.com/tortrixx/slides/releases/download/v2026.09.30/intro.pdf)
 
 站点首页：<https://tortrixx.github.io/slides/>
 
-<sub>由 GitHub Actions 自动生成 · 提交 `61cb639`</sub>
+<sub>由 GitHub Actions 自动生成 · 提交 `acd56a5`</sub>
 ```
 
-版本化 Release（手动打 tag 时）的说明只写一次，之后你手写的内容不会被覆盖。
+手动打 tag 产生的版本化 Release，只在新建时写一次说明，之后你手写的内容不会被覆盖。
 
 ## 增量编译（只重编改动过的幻灯片）
 
@@ -270,9 +282,12 @@ tag 推送 / 发布 Release / 手动运行一律**全量编译**，保证发出�
 把 `release` job 的 `if:` 里 `(github.event_name == 'push' && github.ref == 'refs/heads/main')`
 这一段删掉，就只剩「手动 tag / 发布 Release 才发版本」，日常 push 只更新站点。
 
-**想改回按日期发版本（一天最多一个）？**
-改 `release` job 里「计算 tag」那一步的 else 分支：把 `tag="latest"` 换成
-`tag="v$(date -u +%Y.%m.%d)"` 即可（同一天多次 push 会更新同一个 Release）。
+**想改成别的命名规则？**
+改 `release` job 里「计算 tag」那一步的 else 分支即可。例如固定成单一滚动版本：
+`tag="latest"`；或带上当天提交序号：`tag="v$(TZ="${RELEASE_TZ}" date +%Y.%m.%d)-${GITHUB_RUN_NUMBER}"`。
+
+**想换日期用的时区？**
+改 workflow 顶部的 `RELEASE_TZ`（默认 `Asia/Shanghai`；想用 UTC 就写 `UTC`）。
 
 **`build/` 目录需要提交吗？**
 不需要，它由 CI 生成，已在 `.gitignore` 中忽略。
