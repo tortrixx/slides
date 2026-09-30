@@ -196,9 +196,8 @@
       }
       .gh {
         display: flex;
-        align-items: flex-end;
-        gap: 0.25rem;
-        padding: 0.375rem;
+        align-items: center;
+        padding: 5px;
         border-radius: 0.375rem;
         color: hsl(var(--muted-foreground));
         transition: background-color 0.2s, color 0.2s;
@@ -206,13 +205,6 @@
       .gh:hover {
         background: hsl(var(--secondary));
         color: hsl(var(--foreground));
-      }
-      .gh span {
-        line-height: 1;
-        text-underline-offset: 2px;
-      }
-      .gh:hover span {
-        text-decoration: underline;
       }
 
       /* ---------- 区块 ---------- */
@@ -427,7 +419,8 @@
               />
             </svg>
           </button>
-          <a class="gh" href="https://github.com/tortrixx/slides" target="_blank" rel="noreferrer">
+          <a class="gh" href="https://github.com/tortrixx/slides" target="_blank" rel="noreferrer"
+            aria-label="GitHub 仓库" title="GitHub 仓库">
             <svg
               xmlns="http://www.w3.org/2000/svg"
               width="20"
@@ -444,7 +437,6 @@
               />
               <path d="M9 18c-4.51 2-5-2-7-2" />
             </svg>
-            <span>tortrixx</span>
           </a>
         </div>
       </div>
