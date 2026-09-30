@@ -1,0 +1,251 @@
+# slides
+
+用 [Typst](https://typst.app/) + [Touying](https://github.com/touying-typ/touying) 写的幻灯片集合。
+每套幻灯片放在 `slides/` 下的一个独立文件夹里，推送到 `main` 后由 GitHub Actions 自动：
+
+1. 安装模板里用到的字体（Noto Sans CJK SC / Inter）；
+2. 编译所有 `slides/*/main.typ` 为 PDF；
+3. 生成导航页并部署到 **GitHub Pages**；
+4. 打 tag / 发布 Release 时，把所有 PDF 作为附件上传到该 Release。
+
+## 访问地址
+
+| 内容 | 地址 |
+| --- | --- |
+| 首页（自动生成的导航页） | <https://tortrixx.github.io/slides/> |
+| 单套幻灯片 | `https://tortrixx.github.io/slides/<文件夹名>.pdf` |
+| 例如 | <https://tortrixx.github.io/slides/intro.pdf> |
+
+> 文件名就是 `slides/` 下的文件夹名。`slides/intro/` 编译出来就是 `.../slides/intro.pdf`。
+
+## 目录结构
+
+```
+.
+├── slides/
+│   ├── intro/main.typ        # 完整模板（metropolis + 中文 + pinit 标注）
+│   ├── example/main.typ      # 最小模板（同样的设置，内容最少）
+│   └── 26-09-30/             # 你自己的幻灯片（含 src/ 图片等资源）
+│       ├── main.typ
+│       └── src/
+├── .github/workflows/
+│   └── build-and-deploy.yml  # 全部自动化逻辑
+├── build/index.html          # 不需要手动维护：构建时生成（已被 .gitignore 忽略）
+└── README.md
+```
+
+约定只有一条：**`slides/<名称>/main.typ` 存在，就自动编译成 `<名称>.pdf`**。
+没有 `main.typ` 的文件夹会被自动忽略，可以安全地放笔记、素材等。
+
+## 首次启用（3 步）
+
+### 1. 打开 GitHub Pages
+
+仓库页面 → **Settings → Pages → Build and deployment → Source** 选择
+**GitHub Actions**（不要选 "Deploy from a branch"）。
+
+### 2. 推送代码
+
+本目录**已经**初始化好 git 仓库，并把 `origin` 指向
+`https://github.com/tortrixx/slides.git`，所以只需要：
+
+```bash
+git add -A
+git commit -m "Add Typst slides and CI"   # 首次提交；之后改完再提交即可
+git push -u origin main
+```
+
+（如果是一个全新的目录，则先执行：
+`git init -b main`、`git remote add origin https://github.com/tortrixx/slides.git`。）
+
+### 3. 等待自动构建
+
+推送后到仓库的 **Actions** 标签页可以看到 “Build & Deploy Slides” 正在运行
+（首次因为要下载中文字体，约 2 分钟）。完成后访问
+<https://tortrixx.github.io/slides/> 即可看到导航页。
+
+> 第一次部署完成后，如果 Pages 页面显示 404，等 1～2 分钟再刷新即可。
+
+## 添加一套新幻灯片
+
+```bash
+mkdir -p slides/my-talk
+cp slides/example/main.typ slides/my-talk/main.typ   # 从最小模板复制
+# 然后编辑 slides/my-talk/main.typ，把标题、作者、内容改成你的
+```
+
+```bash
+git add slides/my-talk
+git commit -m "Add my-talk slides"
+git push
+```
+
+推送后会自动编译出 `https://tortrixx.github.io/slides/my-talk.pdf`，并出现在首页列表里。
+如果幻灯片要用图片，放在 `slides/my-talk/src/` 下，在 `main.typ` 中用相对路径引用：
+
+```typst
+#image("src/figure.png", width: 80%)
+```
+
+（工作流会先 `cd` 进幻灯片目录再编译，所以相对路径能正确解析。）
+
+## 幻灯片模板
+
+两份模板的设置完全一致，只有内容多少不同：
+
+| 文件 | 说明 |
+| --- | --- |
+| `slides/intro/main.typ` | 完整模板：封面、目录、分节、`#pause`、中文、公式、pinit 重点标注 |
+| `slides/example/main.typ` | 最小模板：同样设置，只有一页内容和一页结尾 |
+
+统一设置包括：
+
+```typst
+#import "@preview/touying:0.8.0": *
+#import themes.metropolis: *
+#import "@preview/numbly:0.1.0": numbly
+#import "@preview/pinit:0.2.2": *
+
+#show: metropolis-theme.with(aspect-ratio: "16-9", config-info(..))
+
+#set text(
+  font: ((name: "Inter", covers: "latin-in-cjk"), "Noto Sans CJK SC"),
+  weight: "regular", size: 20pt, lang: "zh", region: "cn",
+)
+#show math.equation: set text(font: "New Computer Modern Math")
+#set heading(numbering: numbly("{1}.", default: "1.1"))
+```
+
+想换主题：把 `themes.metropolis` 换成 `themes.simple` / `themes.university` 等。
+注意 `themes.simple` 的封面要写成 `#title-slide[标题]`，而 metropolis 可以直接写
+`#title-slide()`。
+
+## 本地编译 / 预览
+
+```bash
+cd slides/intro
+typst compile main.typ        # 生成 main.pdf
+typst watch main.typ          # 保存即自动重新编译
+```
+
+安装 Typst：`brew install typst`（macOS）或见 <https://github.com/typst/typst#installation>。
+本地版本建议与工作流中的 `TYPST_VERSION` 保持一致（当前为 `0.15.1`）。
+
+## 发布 Release（附带所有 PDF）
+
+两种方式都会触发：
+
+```bash
+# 方式一：打 tag 并推送（tag 以 v 开头才会触发，例如 v1.0 / v2026.09.30）
+git tag v1.0
+git push origin v1.0
+```
+
+- 方式二：在仓库 **Releases → Draft a new release** 里选择/新建 tag 并 **Publish release**。
+
+随后工作流会自动创建（或更新）对应 Release，并把 `build/` 下所有 PDF 作为附件上传。
+编译时会检出该 tag 对应的代码，所以 Release 里的 PDF 就是那个版本的内容。
+
+> 工作流**不会**改动你写的 Release 说明（不开启自动生成更新日志）：因为在网页上发布
+> Release 会同时产生一次 tag push，自动生成的说明可能被追加到你手写的内容后面。
+> 若确实想用自动更新日志，在 workflow 的 release 步骤里加 `generate_release_notes: true`。
+
+## 手动触发一次构建
+
+**Actions → Build & Deploy Slides → Run workflow**，记得分支选择 `main`：
+
+- 选 `main`：编译 + 部署 Pages；
+- 选其它分支：只编译和上传产物，**不会**部署线上站点，也不会创建 Release。
+
+## 字体（模板已自动安装）
+
+模板里指定了两种字体，工作流在编译前会通过 apt 装好：
+
+| 用途 | 字体 | 来源 |
+| --- | --- | --- |
+| 中文 | Noto Sans CJK SC | `fonts-noto-cjk` / `fonts-noto-cjk-extra` |
+| 西文 | Inter | `fonts-inter` |
+| 数学 | New Computer Modern Math | Typst 自带，无需安装 |
+
+说明：
+
+- 字体缺失**不会**让编译失败，但中文会缺字或回退，所以默认就装好；
+- `fonts-noto-cjk-extra` 提供 Medium / Light 等更多字重（模板里用到了
+  `weight: "medium"`）。想加快构建可以删掉它，只留 `fonts-noto-cjk`；
+- 纯英文仓库可以把 workflow 里「安装模板字体」整个步骤删掉，约省 1 分钟；
+- 想用别的字体（思源黑体、霞鹜文楷、Fira Code…）：把字体文件放进仓库，
+  例如 `fonts/`，然后给编译命令加 `--font-path`：
+
+  ```yaml
+  if (cd "$dir" && typst compile --font-path "$PWD/../../fonts" main.typ "$build_dir/$name.pdf"); then
+  ```
+
+  （`$PWD` 在 `cd` 之后展开，所以这两级 `..` 正好回到仓库根目录。）
+- 也可以改用 [Fontist](https://www.fontist.org/) 之类的方式在 CI 里装字体。
+
+## 工作流在做什么
+
+`.github/workflows/build-and-deploy.yml` 分三个互相独立的 job，权限各自最小化：
+
+| job | 触发条件 | 权限 | 作用 |
+| --- | --- | --- | --- |
+| `build` | 任何触发都会运行 | `contents: read` | 装字体、编译所有幻灯片、生成 `build/index.html`、上传产物 |
+| `deploy` | `main` 分支的 push / 在 `main` 上手动运行 | `pages: write`, `id-token: write` | 部署 `build/` 到 GitHub Pages |
+| `release` | 推送 tag / 发布 Release | `contents: write` | 把 PDF 上传到对应 Release |
+
+触发条件：`push` 到 `main`、推送 `v*` tag、`release: published`、以及 `workflow_dispatch`。
+`deploy` 用固定的 `pages` concurrency group 串行化，`release` 用每个 tag 一个 group，
+避免并发冲突。
+
+## 常见问题
+
+**推送后没有触发构建？**
+检查默认分支名是不是 `main`。若是 `master`，把 workflow 里的
+`branches: [main]` 和两个 `if` 里的 `refs/heads/main` 一起改成 `master`。
+
+**Actions 里 `deploy` 失败，提示 Pages 未启用？**
+回到 **Settings → Pages**，把 Source 设成 **GitHub Actions** 再重新运行。
+
+**某套幻灯片编译失败？**
+`deploy` 和 `release` 都会跳过（不会发布残缺的站点），错误日志里会直接指出
+是哪个目录的 `main.typ` 出错。先按日志里的行列号修好再推送。
+
+**想推送任意 tag 都能发 Release？**
+把 workflow 里的 `tags: ["v*"]` 改成 `tags: ["**"]`（匹配所有 tag）。
+
+**`build/` 目录需要提交吗？**
+不需要，它由 CI 生成，已在 `.gitignore` 中忽略。
+
+## 进阶
+
+### 缓存 `@preview` 宏包（加快构建）
+
+`setup-typst` 的 `cache-dependency-path` 只接受**单个可编译的 `.typ` 文件**（不支持通配符）。
+可以在 `build` job 里自动聚合所有宏包导入行，然后交给它缓存 —— 顺序必须是先生成清单、
+再安装 Typst：
+
+```yaml
+      - name: 生成宏包依赖清单（缓存用）
+        run: |
+          mkdir -p "$RUNNER_TEMP/typst-deps"
+          grep -rhoE --include='*.typ' '^#import "@preview/[^"]+"' slides \
+            | sort -u > "$RUNNER_TEMP/typst-deps/requirements.typ"
+          [ -s "$RUNNER_TEMP/typst-deps/requirements.typ" ] || echo '// no preview packages' > "$RUNNER_TEMP/typst-deps/requirements.typ"
+
+      - name: 安装 Typst
+        uses: typst-community/setup-typst@v5
+        with:
+          typst-version: ${{ env.TYPST_VERSION }}
+          cache-dependency-path: ${{ runner.temp }}/typst-deps/requirements.typ
+```
+
+### 换 Typst 版本
+
+改 workflow 顶部的 `TYPST_VERSION`（`env` 里那行）即可，也可以写成 `latest`。
+注意与 Touying 的兼容性：`@preview/touying:0.8.0` 要求 Typst ≥ 0.15.0。
+
+### 自定义首页样式
+
+首页 HTML 由 workflow 里「生成导航页」那一步的 heredoc 生成，直接改里面的
+`<style>` 即可；若想让每套幻灯片显示中文标题而不是文件夹名，可以自己维护一份
+标题映射表并替换生成逻辑。

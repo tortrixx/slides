@@ -1,0 +1,8 @@
+# 编译产物（由 GitHub Actions 生成，无需提交）
+build/
+
+# 本地编译出的 PDF（保留 slides/*/src/ 下的素材 PDF）
+/slides/*/main.pdf
+
+# macOS
+.DS_Store

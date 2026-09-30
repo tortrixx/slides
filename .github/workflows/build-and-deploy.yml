@@ -1,0 +1,242 @@
+# =============================================================================
+# 自动编译所有 slides/*/main.typ → PDF，部署到 GitHub Pages，并在打 tag /
+# 发布 Release 时把 PDF 作为附件上传到 Release。
+#
+# 目录约定：
+#   slides/<名称>/main.typ  →  https://<用户名>.github.io/<仓库名>/<名称>.pdf
+#   首页（自动生成的导航页）→  https://<用户名>.github.io/<仓库名>/
+#
+# 三个 job 各司其职，权限互不重叠：
+#   build   → 安装字体 + 编译 PDF + 生成导航页 + 上传产物   （contents: read）
+#   deploy  → 把 build/ 目录发布到 GitHub Pages             （pages/id-token: write）
+#   release → 把 PDF 上传到对应的 GitHub Release            （contents: write）
+# =============================================================================
+
+name: Build & Deploy Slides
+
+on:
+  push:
+    branches: [main] # 推送到 main 即自动编译并部署 Pages
+    tags: ["v*"] # 推送 v1.0 / v2026.09.30 之类的 tag 时，额外上传 Release
+  release:
+    types: [published] # 在网页上「发布 Release」时也触发一次
+  workflow_dispatch: # 支持在 Actions 页面手动运行
+
+env:
+  # Typst 版本。锁版本可保证构建可复现；想始终用最新稳定版可改成 latest
+  TYPST_VERSION: "0.15.1"
+  # 编译产物目录（Pages 站点根目录）
+  BUILD_DIR: build
+
+# 默认最小权限；需要更高权限的 job 会在下面单独声明
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1) 安装字体、编译所有幻灯片，并准备好 Pages 站点内容
+  # ---------------------------------------------------------------------------
+  build:
+    name: 编译幻灯片
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v7
+        with:
+          # 普通 push / 手动运行：检出触发它的那个 ref；
+          # release 事件下不同来源对 github.ref 的描述不一致，这里显式优先用
+          # 被发布 Release 的 tag，保证「Release 里的 PDF」就是该 tag 的代码。
+          ref: ${{ github.event.release.tag_name || github.ref }}
+
+      # 模板里指定的字体（见 slides/*/main.typ 的 #set text）：
+      #   Noto Sans CJK SC → 中文；Inter → 西文；New Computer Modern Math 由 Typst 自带。
+      # 不装字体也能编译成功，但中文会缺字/回退，所以这里默认装好。
+      # 纯英文仓库想加快构建，可以整段删掉或注释掉（约省 1 分钟）。
+      - name: 安装模板字体（Noto Sans CJK SC / Inter）
+        run: |
+          sudo apt-get update
+          # -extra 提供 Medium/Light 等更多 CJK 字重（模板里用到了 weight: "medium"）；
+          # 万一某些包不可用，至少保证基础 CJK 字体装上，避免整段失败。
+          sudo apt-get install -y --no-install-recommends \
+            fonts-noto-cjk fonts-noto-cjk-extra fonts-inter \
+            || sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+          fc-cache -f
+
+          # 打印实际识别到的字族，方便排查字体问题（找不到时不要让步骤失败）
+          fc-list : family | grep -iE 'noto sans cjk|inter' | sort -u | head -n 10 || true
+
+      - name: 安装 Typst
+        uses: typst-community/setup-typst@v5
+        with:
+          typst-version: ${{ env.TYPST_VERSION }}
+          # 可选优化：把 cache-dependency-path 指向一个「只含 @preview import 行」的
+          # .typ 文件即可缓存宏包（该输入只接受单个可编译的文件，不支持通配符）。
+          # 需要时见 README「进阶：缓存 @preview 宏包」一节。
+
+      - name: 编译 slides/*/main.typ → build/*.pdf
+        run: |
+          set -uo pipefail
+
+          build_dir="$PWD/$BUILD_DIR"
+          mkdir -p "$build_dir"
+
+          found=0
+          failed=0
+          for dir in slides/*/; do
+            # 只处理包含 main.typ 的子目录，其他目录自动忽略
+            [ -f "${dir}main.typ" ] || continue
+            found=1
+            name="$(basename "$dir")"
+
+            echo "::group::编译 $name"
+            # 关键：先进入幻灯片所在目录再编译，
+            # 这样 main.typ 里的相对路径（如 image("src/xxx.png")）才能正确解析。
+            if (cd "$dir" && typst compile main.typ "$build_dir/$name.pdf"); then
+              echo "✅ $name → $BUILD_DIR/$name.pdf"
+            else
+              echo "::error::幻灯片 $name 编译失败，请检查 ${dir}main.typ"
+              failed=1
+            fi
+            echo "::endgroup::"
+          done
+
+          if [ "$found" -eq 0 ]; then
+            echo "::error::没有找到任何 slides/*/main.typ，请先添加幻灯片。"
+            exit 1
+          fi
+
+          # 有任何一份编译失败就终止，避免把不完整的站点发布出去
+          if [ "$failed" -ne 0 ]; then
+            echo "::error::存在编译失败的幻灯片，已停止后续部署。"
+            exit 1
+          fi
+
+          echo "编译完成，产物如下："
+          ls -lh "$build_dir"
+
+      - name: 生成导航页 build/index.html
+        run: |
+          set -euo pipefail
+
+          {
+            cat <<'HTML_HEAD'
+          <!DOCTYPE html>
+          <html lang="zh-CN">
+          <head>
+          <meta charset="utf-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1" />
+          <title>Slides</title>
+          <style>
+            :root { color-scheme: light dark; }
+            body { margin: 0 auto; max-width: 46rem; padding: 2.5rem 1.25rem 4rem;
+                   font-family: system-ui, -apple-system, "Segoe UI", "Noto Sans CJK SC", sans-serif;
+                   line-height: 1.6; }
+            h1 { font-size: 1.75rem; margin-bottom: 0.25rem; }
+            p.sub { margin-top: 0; opacity: 0.65; }
+            ul { list-style: none; padding: 0; }
+            li { margin: 0.5rem 0; }
+            a { display: block; padding: 0.85rem 1rem; text-decoration: none; color: inherit;
+                border: 1px solid rgba(128, 128, 128, 0.35); border-radius: 10px;
+                transition: border-color 0.15s, background 0.15s; }
+            a:hover { border-color: currentColor; background: rgba(128, 128, 128, 0.1); }
+            a span { display: block; font-size: 0.85rem; opacity: 0.6; }
+            footer { margin-top: 2.5rem; font-size: 0.85rem; opacity: 0.6; }
+          </style>
+          </head>
+          <body>
+          <h1>Slides</h1>
+          <p class="sub">点击标题在线预览 PDF，或右键「另存为」下载。</p>
+          <ul>
+          HTML_HEAD
+
+            # 每个 PDF 生成一个链接（文件名即 slides/ 下的文件夹名）
+            for pdf in "$BUILD_DIR"/*.pdf; do
+              [ -e "$pdf" ] || continue
+              name="$(basename "$pdf" .pdf)"
+              printf '  <li><a href="%s.pdf">%s<span>%s.pdf</span></a></li>\n' "$name" "$name" "$name"
+            done
+
+            cat <<'HTML_TAIL'
+          </ul>
+          <footer>本页由 GitHub Actions 自动生成；在 slides/ 下新增文件夹并推送后会自动出现在这里。</footer>
+          </body>
+          </html>
+          HTML_TAIL
+          } > "$BUILD_DIR/index.html"
+
+          echo "已生成 $BUILD_DIR/index.html："
+          cat "$BUILD_DIR/index.html"
+
+      # 给 release job 下载用的普通产物（下载后仍是 build/xxx.pdf，便于直接用通配符上传）
+      - name: 上传 PDF 产物
+        uses: actions/upload-artifact@v7
+        with:
+          name: slides-build
+          path: ${{ env.BUILD_DIR }}
+          if-no-files-found: error
+
+      # 给 deploy job 用的 Pages 站点产物（整份 build/ 目录，含 index.html）
+      - name: 上传 Pages 站点产物
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: ${{ env.BUILD_DIR }}
+
+  # ---------------------------------------------------------------------------
+  # 2) 部署到 GitHub Pages
+  #    只在 main 分支的 push / 手动运行（且手动运行时也选的 main）才部署；
+  #    tag 推送和 release 事件只出 Release，不动线上站点。
+  # ---------------------------------------------------------------------------
+  deploy:
+    name: 部署到 GitHub Pages
+    needs: build
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    # 同一时间只允许一个 Pages 部署，避免并发部署互相覆盖；不打断已在进行的部署
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    permissions:
+      pages: write # 创建 Pages 部署
+      id-token: write # 申请 OIDC token，验证部署来源
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: 部署 Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
+
+  # ---------------------------------------------------------------------------
+  # 3) 打 tag / 发布 Release 时，把 PDF 上传到对应 Release
+  # ---------------------------------------------------------------------------
+  release:
+    name: 上传 PDF 到 Release
+    needs: build
+    # 只认「push 一个 tag」和「发布 Release」两件事；
+    # 从 tag 手动运行（workflow_dispatch）不会创建 Release。
+    if: github.event_name == 'release' || (github.event_name == 'push' && github.ref_type == 'tag')
+    runs-on: ubuntu-latest
+    # 在网页上「发布 Release」会同时产生 tag push 事件，可能让本工作流跑两次并操作同一个
+    # Release；用同一个 concurrency group 把两次运行串行化，避免并发上传附件互相冲突。
+    concurrency:
+      group: release-${{ github.event.release.tag_name || github.ref_name }}
+      cancel-in-progress: false
+    permissions:
+      contents: write # 创建/更新 Release 并上传附件
+    steps:
+      - name: 下载编译产物
+        uses: actions/download-artifact@v8
+        with:
+          name: slides-build
+          path: ${{ env.BUILD_DIR }}
+
+      - name: 创建 / 更新 Release 并上传 PDF
+        uses: softprops/action-gh-release@v3
+        with:
+          # push tag 时用 tag 名；release 事件时用该 Release 自己的 tag
+          tag_name: ${{ github.event.release.tag_name || github.ref_name }}
+          files: ${{ env.BUILD_DIR }}/*.pdf
+          fail_on_unmatched_files: true
+          # 这里故意不开 generate_release_notes：发布 Release 会伴随一次 tag push，
+          # 自动生成的说明会被追加到你手写的 Release 说明后面。
+          # 确实想要自动更新日志时，加一行 `generate_release_notes: true` 即可。
