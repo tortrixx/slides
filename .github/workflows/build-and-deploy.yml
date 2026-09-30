@@ -34,9 +34,6 @@ env:
   BUILD_DIR: build
   # 按日期发版时用哪个时区决定 tag 里的日期（想用 UTC 就写 UTC）
   RELEASE_TZ: "Asia/Shanghai"
-  # push 事件的「上一次提交」，用于判断哪些幻灯片需要重新编译；
-  # 其它事件（手动运行 / tag / release）取不到，会走全量编译。
-  BEFORE_SHA: ${{ github.event.before }}
 
 # 默认最小权限；需要更高权限的 job 会在下面单独声明
 permissions:
