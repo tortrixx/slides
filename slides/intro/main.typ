@@ -106,7 +106,8 @@ $ V^pi(s) = E_pi[G_t | s_t = s] $
 
 1. 复制 `slides/intro/` 整个文件夹并重命名
 2. 修改上面的 `config-info(...)` 和正文
-3. `git push`，等待 Actions 编译并部署
+3. `git push`，Actions 会自动编译、更新站点，并发布一个新的版本（Release 里附上全部 PDF，无需手动打 tag）
+4. 只有改动过的幻灯片会被重新编译，其余直接复用上次的产物
 
 #focus-slide[
   谢谢！
