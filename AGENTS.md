@@ -198,7 +198,7 @@ CI 逻辑全在 YAML 的 `run: |` 里，改完不能只靠肉眼。推荐流程�
 
 ## 8. 可能的后续改进
 
-- 缓存 `@preview` 宏包（见 README 的历史版本或 git log，思路是聚合 `#import "@preview/..."`
-  到 `$RUNNER_TEMP` 下一个文件再交给 `cache-dependency-path`）。
+- 缓存 `@preview` 宏包：思路是在安装 Typst 前，把所有 `#import "@preview/..."` 行聚合到
+  `$RUNNER_TEMP` 下的一个 `.typ` 文件，再把它交给 `cache-dependency-path`（该输入只认单个可编译文件）。
 - 导航页目前用文件夹名当标题；如需中文标题可维护一份映射表并替换生成逻辑。
 - `fonts-noto-cjk-extra` 需要时加回即可（换更多中文字重）。
