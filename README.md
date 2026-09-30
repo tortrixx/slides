@@ -6,7 +6,7 @@
 1. 安装模板里用到的字体（Noto Sans CJK SC / Inter）；
 2. 编译 `slides/*/main.typ` 为 PDF（只重编改动过的幻灯片）；
 3. 生成导航页并部署到 **GitHub Pages**；
-4. **自动发版本**：自动把版本号 +1 并创建 GitHub Release，把全部 PDF 作为附件传上去。
+4. **同步到一个永远最新的 Release**：所有 PDF 覆盖到 tag 为 `latest` 的 Release，不需要打 tag 或写版本号。
 
 ## 访问地址
 
@@ -144,41 +144,48 @@ typst watch main.typ          # 保存即自动重新编译
 安装 Typst：`brew install typst`（macOS）或见 <https://github.com/typst/typst#installation>。
 本地版本建议与工作流中的 `TYPST_VERSION` 保持一致（当前为 `0.15.1`）。
 
-## 自动发版本（不需要手动打 tag）
+## 发版策略：一个永远最新的 Release（tag 数量恒定）
 
-每次推送到 `main` 且构建成功后，工作流会：
-
-1. 取仓库里已有的 `vX.Y.Z` 标签中最大的那个，把 patch 号 +1（一个都没有就从 `v1.0.0` 开始）；
-2. 用这个版本号自动创建 tag 和 GitHub Release（自动创建的 tag 指向本次构建的提交）；
-3. 把 `build/` 下所有 PDF 作为附件上传。
-
-所以正常开发只要 `git push`，不用管 tag：
+日常写完幻灯片 `git push` 就够了：**不打 tag、不写说明、版本号也不用管**。
+所有 PDF 会覆盖到同一个 tag 为 `latest` 的 Release 里，所以 **tag / Release 数量恒定，
+不会随 push 次数增长**，也不会反复给 watch 了 Releases 的人发通知。
 
 | 你的操作 | 结果 |
 | --- | --- |
-| 第一次 push 到 `main` | 自动发 `v1.0.0` |
-| 之后每次 push 到 `main` | 自动发 `v1.0.1`、`v1.0.2`… |
-| 手动 `git tag v2.0.0 && git push origin v2.0.0` | 用你指定的 `v2.0.0` 发版本，不再自动 +1 |
-| 在网页上编辑 / 发布 Release | 把最新的 PDF 补传到该 Release |
+| push 到 `main` | Pages 更新 + 把全部 PDF 覆盖到 `latest` Release（说明同步刷新） |
+| 手动 `git tag v2.0.0 && git push origin v2.0.0` | 额外建一个版本化 Release（与 `latest` 共存），用于正式快照 |
+| 在网页上编辑 / 发布 Release | 只把最新 PDF 补传到该 Release，**不动**你写的说明 |
 
-Release 标题就是版本号（例如 `v1.0.4`），附件是 `build/` 下的全部 PDF。
+**固定的下载地址**（永远指向最新版，适合直接发给别人）：
 
-**Release 说明是自动生成的**，只在**新建**版本时写入（已存在的 Release 绝不会被改动，
-所以你在网页上手写的说明不会被覆盖）。内容大致是：
+```
+https://github.com/tortrixx/slides/releases/download/latest/intro.pdf
+https://github.com/tortrixx/slides/releases/download/latest/example.pdf
+https://github.com/tortrixx/slides/releases/download/latest/26-09-30.pdf
+```
+
+> 注意：GitHub 的 `…/releases/latest/download/…` 指向「被标记为 Latest 的那个 Release」。
+> 如果你后来发了版本化 Release（例如 `v2.0.0`），Latest 标记可能移到它身上。
+> 想永远指向最新编译结果，请用上面带 `latest` tag 的地址。
+
+`latest` Release 的说明由工作流每次自动刷新（因为它是工作流自己维护的）：
 
 ```markdown
-本次发布包含 build 下编译好的幻灯片，点击文件名可直接在线预览：
+🔄 **这是自动滚动更新的最新版**：每次 push 到 `main` 都会把下面的 PDF 换成最新编译结果，
+本 Release 的 tag 固定为 `latest`。
 
-- [`26-09-30.pdf`](https://tortrixx.github.io/slides/26-09-30.pdf)
-- [`example.pdf`](https://tortrixx.github.io/slides/example.pdf)
-- [`intro.pdf`](https://tortrixx.github.io/slides/intro.pdf)
+包含以下幻灯片（左侧链接在线预览，右侧链接直接下载）：
+
+- [`26-09-30.pdf`](https://tortrixx.github.io/slides/26-09-30.pdf) · [下载](https://github.com/tortrixx/slides/releases/download/latest/26-09-30.pdf)
+- [`example.pdf`](https://tortrixx.github.io/slides/example.pdf) · [下载](https://github.com/tortrixx/slides/releases/download/latest/example.pdf)
+- [`intro.pdf`](https://tortrixx.github.io/slides/intro.pdf) · [下载](https://github.com/tortrixx/slides/releases/download/latest/intro.pdf)
 
 站点首页：<https://tortrixx.github.io/slides/>
 
-**完整变更**：https://github.com/tortrixx/slides/compare/v1.0.3...v1.0.4
-
-<sub>由 GitHub Actions 自动生成 · 提交 `ccfea2a`</sub>
+<sub>由 GitHub Actions 自动生成 · 提交 `61cb639`</sub>
 ```
+
+版本化 Release（手动打 tag 时）的说明只写一次，之后你手写的内容不会被覆盖。
 
 ## 增量编译（只重编改动过的幻灯片）
 
@@ -258,13 +265,13 @@ tag 推送 / 发布 Release / 手动运行一律**全量编译**，保证发出�
 **想推送任意 tag 都能发 Release？**
 把 workflow 里的 `tags: ["v*"]` 改成 `tags: ["**"]`（匹配所有 tag）。
 
-**不想每次 push 都自动发版本？**
+**不想要日常的 `latest` Release？**
 把 `release` job 的 `if:` 里 `(github.event_name == 'push' && github.ref == 'refs/heads/main')`
-这一段删掉，就回到「只有手动 tag / 发布 Release 才发版本」。
+这一段删掉，就只剩「手动 tag / 发布 Release 才发版本」，日常 push 只更新站点。
 
-**想改版本号规则（比如按日期）？**
-改 `release` job 里「计算版本号」那一步：把 `tag="v${major}.${minor}.$((patch + 1))"`
-换成比如 `tag="v$(date -u +%Y.%m.%d)-${GITHUB_RUN_NUMBER}"` 即可。
+**想改回按日期发版本（一天最多一个）？**
+改 `release` job 里「计算 tag」那一步的 else 分支：把 `tag="latest"` 换成
+`tag="v$(date -u +%Y.%m.%d)"` 即可（同一天多次 push 会更新同一个 Release）。
 
 **`build/` 目录需要提交吗？**
 不需要，它由 CI 生成，已在 `.gitignore` 中忽略。

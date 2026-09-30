@@ -294,11 +294,11 @@ jobs:
     permissions:
       contents: write # 创建 tag / Release 并上传附件
     steps:
-      # 版本号规则：
-      #   * main 推送          → 取现有 vX.Y.Z 里最大的那个，patch +1（没有则 v1.0.0）
-      #   * 手动推送 v* tag     → 直接用该 tag
-      #   * release 事件        → 用该 Release 的 tag
-      - name: 计算版本号
+      # tag 规则：
+      #   * main 推送        → 滚动发布：固定 tag `latest`，覆盖它里面的 PDF（tag 数量恒定为 1）
+      #   * 手动推送 v* tag   → 用该 tag 建一个正式的版本化 Release（与 latest 共存）
+      #   * release 事件      → 只给那个 Release 补附件，不动说明
+      - name: 计算 tag
         id: version
         env:
           GH_TOKEN: ${{ github.token }}
@@ -307,47 +307,34 @@ jobs:
           set -euo pipefail
 
           tag=""
-          previous=""
+          rolling=false
 
           if [ "${GITHUB_EVENT_NAME}" = "release" ] && [ -n "${RELEASE_TAG}" ]; then
             tag="${RELEASE_TAG}"
-            echo "使用 Release 自带的 tag：$tag"
+            echo "使用 Release 自带的 tag：${tag}"
           elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             tag="${GITHUB_REF_NAME}"
-            echo "使用本次推送的 tag：$tag"
+            echo "使用本次推送的 tag：${tag}"
           else
-            latest="$(gh api "repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/v" \
-                        --paginate --jq '.[].ref' 2>/dev/null \
-                      | sed 's|^refs/tags/||' \
-                      | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
-                      | sort -V | tail -n 1 || true)"
-            previous="${latest}"
-            if [ -z "$latest" ]; then
-              tag="v1.0.0"
-            else
-              ver="${latest#v}"
-              major="${ver%%.*}"
-              rest="${ver#*.}"
-              minor="${rest%%.*}"
-              patch="${rest#*.}"
-              tag="v${major}.${minor}.$((patch + 1))"
-            fi
-            echo "自动版本号：${tag}（上一个版本：${latest:-无}）"
+            # 日常 push：更新同一个滚动 Release，不新增 tag
+            tag="latest"
+            rolling=true
+            echo "滚动发布：把 PDF 更新到 ${tag} Release"
           fi
 
-          # 这个版本是否已经有 Release：
-          #   false → 是本次新建，可以写一份说明（列出版幻灯片）
-          #   true  → 已存在，只补附件，绝不动你手写的说明
+          # 该 Release 是否已存在：
+          #   false → 本次新建，可以写一份自动说明
+          #   true  → 已存在；滚动发布刷新说明，版本化 Release 只补附件
           if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             exists=true
           else
             exists=false
           fi
-          echo "版本 ${tag} 的 Release 是否已存在：${exists}"
+          echo "Release ${tag} 是否已存在：${exists}"
 
           {
             echo "tag=${tag}"
-            echo "previous=${previous}"
+            echo "rolling=${rolling}"
             echo "exists=${exists}"
           } >> "$GITHUB_OUTPUT"
 
@@ -357,54 +344,57 @@ jobs:
           name: slides-build
           path: ${{ env.BUILD_DIR }}
 
-      # 只在「新建 Release」时生成说明：列出本次包含的幻灯片 + 在线地址。
-      # 已存在的 Release 不生成，避免覆盖你手写的说明。
-      - name: 生成 Release 说明（仅新建时）
-        if: steps.version.outputs.exists == 'false'
+      # 生成说明：滚动的 latest Release 每次都刷新；
+      # 版本化 Release 只在新建时写一次，已存在时绝不动你手写的说明。
+      - name: 生成 Release 说明
+        if: steps.version.outputs.rolling == 'true' || steps.version.outputs.exists == 'false'
         env:
           TAG: ${{ steps.version.outputs.tag }}
-          PREVIOUS: ${{ steps.version.outputs.previous }}
+          ROLLING: ${{ steps.version.outputs.rolling }}
         run: |
           set -euo pipefail
           site="https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}"
 
           {
-            echo "本次发布包含 ${BUILD_DIR} 下编译好的幻灯片，点击文件名可直接在线预览："
+            if [ "${ROLLING}" = "true" ]; then
+              echo "🔄 **这是自动滚动更新的最新版**：每次 push 到 \`main\` 都会把下面的 PDF 换成最新编译结果，本 Release 的 tag 固定为 \`${TAG}\`。"
+              echo
+            fi
+            echo "包含以下幻灯片（左侧链接在线预览，右侧链接直接下载）："
             echo
             for pdf in "$BUILD_DIR"/*.pdf; do
               [ -e "$pdf" ] || continue
               name="$(basename "$pdf")"
-              echo "- [\`${name}\`](${site}/${name})"
+              echo "- [\`${name}\`](${site}/${name}) · [下载](https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${name})"
             done
             echo
             echo "站点首页：<${site}/>"
-            if [ -n "${PREVIOUS:-}" ]; then
-              echo
-              echo "**完整变更**：https://github.com/${GITHUB_REPOSITORY}/compare/${PREVIOUS}...${TAG}"
-            fi
             echo
             echo "<sub>由 GitHub Actions 自动生成 · 提交 \`${GITHUB_SHA:0:7}\`</sub>"
           } > "$RUNNER_TEMP/release-notes.md"
 
           cat "$RUNNER_TEMP/release-notes.md"
 
-      - name: 新建 Release 并上传 PDF
-        if: steps.version.outputs.exists == 'false'
+      # 滚动 latest（覆盖附件 + 刷新说明）或新建版本化 Release
+      - name: 发布（滚动 latest / 新建版本化 Release）
+        if: steps.version.outputs.rolling == 'true' || steps.version.outputs.exists == 'false'
         uses: softprops/action-gh-release@v3
         with:
-          # tag 不存在时（main 自动发版本）会由本步骤自动创建
           tag_name: ${{ steps.version.outputs.tag }}
-          # 自动创建 tag 时，指向本次构建的那个提交
+          # 首次自动创建 tag 时，指向本次构建的那个提交
           target_commitish: ${{ github.sha }}
           body_path: ${{ runner.temp }}/release-notes.md
           files: ${{ env.BUILD_DIR }}/*.pdf
+          # 同名附件直接覆盖，滚动 Release 就是这样保持最新的
+          overwrite_files: true
           fail_on_unmatched_files: true
 
-      # 已经存在的 Release：只补/覆盖附件，完全不传 body，说明保持你写的内容
-      - name: 更新已有 Release 的附件
-        if: steps.version.outputs.exists == 'true'
+      # 已经存在的版本化 Release（例如从网页发布）：只补/覆盖附件，不传 body
+      - name: 只更新已有版本化 Release 的附件
+        if: steps.version.outputs.rolling == 'false' && steps.version.outputs.exists == 'true'
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           files: ${{ env.BUILD_DIR }}/*.pdf
+          overwrite_files: true
           fail_on_unmatched_files: true
