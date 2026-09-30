@@ -34,9 +34,10 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
 │       └── src/
 ├── .github/workflows/
 │   └── build-and-deploy.yml  # 全部自动化逻辑（唯一的 CI 文件）
+├── index.template.html       # 站点首页模板（构建时注入幻灯片列表）
 ├── AGENTS.md                 # 本文件
 ├── README.md                 # 用户文档
-└── .gitignore                # 忽略 build/ 与本地编译出的 slides/*/main.pdf
+└── .gitignore                # 忽略 build/ 与本地编译出的 slides/*.main.pdf
 ```
 
 `build/` 是 CI 产物目录（站点根），不要提交。
@@ -113,10 +114,19 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
   `git diff --name-only <BEFORE_SHA> <GITHUB_SHA> -- slides` 里出现过 → 重编，否则复用。
   最后清理「`slides/<名称>/main.typ` 已不存在」的残留 PDF。
   tag / release / 手动运行一律全量编译。
-- **导航页**：`build/index.html` 由脚本内 heredoc 生成，链接全部是相对路径
-  （`<名称>.pdf`），因此在项目页 `/slides/` 下能正确解析。
+- **导航页**：`index.template.html` 是首页模板（版式/样式都在里面），workflow 只负责
+  注入数据，产物 `build/index.html` 是**服务端渲染**的静态页（无 JS 也能看）。
+  三处占位注释由 `awk` 替换：`SLIDES`（卡片列表）、`COUNT`（套数）、`META`（更新时间+提交号）。
+  卡片的标题/副标题用 `sed` 从各 deck 的 `config-info(...)` 里取 `title:`/`subtitle:`，
+  取不到就退回文件夹名；文件大小由 `wc -c` 换算。
+- **首页视觉**：沿用 <https://github.com/tortrixx/tortrixx> 的设计语言（等宽字体、
+  shadcn neutral 色阶、虚线网格背景、hover 光边框 BorderBeam、BlurFade 入场、
+  localStorage 记忆深浅色）。改样式只动 `index.template.html`，不用碰 workflow。
+  注意 `<meta charset>` 必须留在文件最前面——模板开头那段中文注释一旦挪到它前面，
+  就会超出 1024 字节的编码探测窗口，页面会乱码。
 - **产物**：`slides-build`（普通 artifact，给 release job 下载）+ `github-pages`
-  （`actions/upload-pages-artifact@v5`，给 deploy job）。
+  （`actions/upload-pages-artifact@v5`，给 deploy job）。`index.template.html` 在仓库根，
+  不会进站点（只上传 `build/`）。
 
 ### release 细节
 
@@ -148,6 +158,20 @@ typst compile --format png --pages 6 main.typ '/tmp/p-{p}.png'
 gh run list --repo tortrixx/slides
 gh release list --repo tortrixx/slides
 gh api repos/tortrixx/slides/releases --jq '.[].tag_name'
+```
+
+**本地预览首页**（模板 + 生成步骤）：
+
+```bash
+RUNNER_TEMP=/tmp/rt BUILD_DIR=build RELEASE_TZ=Asia/Shanghai \
+  GITHUB_SHA=$(git rev-parse --short HEAD) bash /tmp/wf-scripts/build-5-*.sh
+# 然后用无头 Chrome 截图看效果。两个坑：
+#   1) headless 默认 prefers-color-scheme: dark —— 想截浅色要显式 remove("dark")
+#   2) 入场动画带 fill-mode: both，t=0 时元素是 opacity:0 —— 截图前注入
+#      .fade{animation:none;opacity:1}，否则截出一张空页
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new \
+  --user-data-dir=/tmp/cprof --window-size=1100,1250 \
+  --screenshot=/tmp/shot.png file:///path/to/index.html
 ```
 
 ## 6. 改 workflow 后的验证清单（务必执行）
@@ -200,5 +224,6 @@ CI 逻辑全在 YAML 的 `run: |` 里，改完不能只靠肉眼。推荐流程�
 
 - 缓存 `@preview` 宏包：思路是在安装 Typst 前，把所有 `#import "@preview/..."` 行聚合到
   `$RUNNER_TEMP` 下的一个 `.typ` 文件，再把它交给 `cache-dependency-path`（该输入只认单个可编译文件）。
-- 导航页目前用文件夹名当标题；如需中文标题可维护一份映射表并替换生成逻辑。
+- 首页目前只显示标题/副标题/大小；想要页数、封面缩略图或每套 deck 的自定义描述，
+  可以在 index 生成步骤里扩展（页数可解析 PDF，缩略图可用 `typst compile --format png` 首先生成）。
 - `fonts-noto-cjk-extra` 需要时加回即可（换更多中文字重）。

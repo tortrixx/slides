@@ -1,0 +1,623 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <!--
+      站点首页模板。
+      构建时 workflow 会替换三处占位注释（SLIDES / COUNT / META），产物是 build/index.html。
+      其中 SLIDES 是服务端渲染出来的幻灯片卡片，所以不依赖 JS；JS 只负责深浅色切换。
+      样式沿用 tortrixx/tortrixx（Astro + shadcn + magicui）的视觉语言：
+      等宽字体、中性色阶、虚线网格背景、hover 光边框、淡入、深浅色切换。
+      想改样式直接改本文件的 <style>，也可以在本地打开它预览整体版式（卡片区会是空的）。
+      注意：charset 必须留在文件最前面（1024 字节内），别把这段注释挪到它前面。
+    -->
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Slides · tortrixx</title>
+    <meta
+      name="description"
+      content="tortrixx 的幻灯片集合：用 Typst + Touying 编写，推送后自动编译为 PDF。"
+    />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#FFF" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#09090B" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%2318181b'/%3E%3Crect x='3' y='3.6' width='10' height='1.6' rx='.8' fill='%23fafafa'/%3E%3Crect x='3' y='7.2' width='10' height='1.6' rx='.8' fill='%23fafafa'/%3E%3Crect x='3' y='10.8' width='6' height='1.6' rx='.8' fill='%23fafafa'/%3E%3C/svg%3E"
+    />
+    <style>
+      /* ---------- 设计变量（与 shadcn 的 neutral 主题一致） ---------- */
+      :root {
+        --background: 0 0% 100%;
+        --foreground: 0 0% 3.9%;
+        --secondary: 0 0% 94%;
+        --muted: 0 0% 96.1%;
+        --muted-foreground: 0 0% 45.1%;
+        --border: 0 0% 89.8%;
+        --radius: 0.5rem;
+        --accent-blue: #60a5fa;
+        --accent-yellow: #facc15;
+      }
+      .dark {
+        --background: 0 0% 3.9%;
+        --foreground: 0 0% 98%;
+        --secondary: 0 0% 14.9%;
+        --muted: 0 0% 14.9%;
+        --muted-foreground: 0 0% 63.9%;
+        --border: 0 0% 25.1%;
+      }
+
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+        border-color: hsl(var(--border));
+      }
+
+      html {
+        color-scheme: light;
+      }
+      html.dark {
+        color-scheme: dark;
+      }
+
+      body {
+        position: relative;
+        margin: 0 auto;
+        width: 90%;
+        max-width: 48rem;
+        padding: 1.25rem 0 2.5rem;
+        background: hsl(var(--background));
+        color: hsl(var(--foreground));
+        font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+          "Roboto Mono", "Noto Sans Mono CJK SC", "Noto Sans Mono", monospace;
+        font-size: 16px;
+        line-height: 1.6;
+        -webkit-font-smoothing: antialiased;
+      }
+      @media (min-width: 640px) {
+        body {
+          padding-top: 2.5rem;
+        }
+      }
+
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+
+      /* ---------- 背景：虚线网格 + 中心径向遮罩 ---------- */
+      .bg-grid {
+        position: fixed;
+        inset: 0;
+        z-index: -1;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        -webkit-mask-image: radial-gradient(circle at center, rgba(0, 0, 0, 0.6), transparent);
+        mask-image: radial-gradient(circle at center, rgba(0, 0, 0, 0.6), transparent);
+      }
+      .bg-grid path {
+        stroke: rgb(156 163 175 / 0.3);
+      }
+
+      /* ---------- 淡入（对应 magicui 的 BlurFade） ---------- */
+      @keyframes blur-fade {
+        from {
+          opacity: 0;
+          transform: translateY(8px);
+          filter: blur(6px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+          filter: blur(0);
+        }
+      }
+      .fade {
+        animation: blur-fade 0.35s ease-out both;
+        animation-delay: calc(0.04s + var(--i, 0) * 0.1s);
+      }
+
+      /* ---------- 顶栏 ---------- */
+      header {
+        margin-bottom: 1.25rem;
+      }
+      .head-row {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.5rem;
+        padding-bottom: 1rem;
+        border-bottom: 1px solid hsl(var(--border));
+      }
+      @media (min-width: 640px) {
+        .head-row {
+          flex-direction: row;
+          align-items: flex-end;
+          gap: 0;
+        }
+      }
+      .avatar {
+        height: 80px;
+        width: 80px;
+        flex: none;
+        border-radius: 9999px;
+        transition: transform 0.3s ease;
+      }
+      .avatar:hover {
+        transform: rotate(180deg);
+      }
+      .tagline {
+        font-size: 1.25rem;
+        font-weight: 500;
+      }
+      @media (min-width: 640px) {
+        .tagline {
+          margin-left: 1.5rem;
+        }
+      }
+      .spacer {
+        flex: 1;
+      }
+      .head-actions {
+        display: flex;
+        align-items: center;
+      }
+      .icon-btn {
+        margin-right: 0.25rem;
+        padding: 5px;
+        border: 0;
+        border-radius: 0.375rem;
+        background: transparent;
+        color: hsl(var(--muted-foreground));
+        cursor: pointer;
+        transition: background-color 0.2s, color 0.2s;
+      }
+      .icon-btn:hover {
+        background: hsl(var(--secondary));
+        color: hsl(var(--foreground));
+      }
+      .icon-btn svg {
+        display: block;
+        height: 22px;
+        width: 22px;
+      }
+      /* 浅色下显示太阳（实心），深色下显示月亮 */
+      .icon-sun {
+        fill: currentColor;
+      }
+      .dark .icon-sun {
+        fill: transparent;
+      }
+      .icon-moon {
+        fill: transparent;
+      }
+      .dark .icon-moon {
+        fill: currentColor;
+      }
+      .gh {
+        display: flex;
+        align-items: flex-end;
+        gap: 0.25rem;
+        padding: 0.375rem;
+        border-radius: 0.375rem;
+        color: hsl(var(--muted-foreground));
+        transition: background-color 0.2s, color 0.2s;
+      }
+      .gh:hover {
+        background: hsl(var(--secondary));
+        color: hsl(var(--foreground));
+      }
+      .gh span {
+        line-height: 1;
+        text-underline-offset: 2px;
+      }
+      .gh:hover span {
+        text-decoration: underline;
+      }
+
+      /* ---------- 区块 ---------- */
+      main {
+        display: flex;
+        flex-direction: column;
+        gap: 1.25rem;
+      }
+      h3 {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin: 0 0 0.75rem;
+        padding-bottom: 0.75rem;
+        font-size: 1.125rem;
+        font-weight: 500;
+        text-decoration: underline;
+        text-underline-offset: 4px;
+      }
+      .count {
+        padding: 0 0.5rem;
+        border: 1px solid hsl(var(--border));
+        border-radius: 9999px;
+        font-size: 0.75rem;
+        font-weight: 400;
+        color: hsl(var(--muted-foreground));
+        text-decoration: none;
+      }
+
+      /* ---------- 幻灯片卡片 ---------- */
+      .deck {
+        position: relative;
+        display: flex;
+        gap: 0.625rem;
+        width: 100%;
+        padding: 0.5rem 0.5rem 0.375rem;
+        border-radius: var(--radius);
+        transition: background-color 0.3s ease;
+      }
+      .deck:hover {
+        background: hsl(var(--secondary));
+      }
+      .deck .bar {
+        flex: none;
+        width: 0.375rem;
+        border-radius: 2px;
+        background: rgb(248 113 113 / 0.6);
+        transition: background-color 0.7s ease;
+      }
+      .deck:hover .bar {
+        background: rgb(248 113 113);
+      }
+      .deck-main {
+        min-width: 0;
+        flex: 1;
+      }
+      .deck-title {
+        display: inline-flex;
+        align-items: flex-end;
+        line-height: 1;
+        text-underline-offset: 4px;
+        transition: transform 0.3s ease;
+      }
+      .deck:hover .deck-title {
+        transform: translateY(-2px);
+        text-decoration: underline;
+      }
+      .deck-title .ext {
+        margin-left: 1.5rem;
+        opacity: 0;
+        transform: translateX(-1.5rem);
+        transition: opacity 0.3s ease, transform 0.3s ease;
+      }
+      .deck:hover .deck-title .ext {
+        opacity: 1;
+        transform: translateX(0);
+      }
+      .deck-desc {
+        margin-top: 0.5rem;
+        font-size: 0.875rem;
+        color: hsl(var(--muted-foreground));
+        transition: color 0.3s ease;
+      }
+      .deck:hover .deck-desc {
+        color: hsl(var(--foreground));
+      }
+      .deck-meta {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.375rem;
+        margin-top: 0.5rem;
+        font-size: 0.75rem;
+        color: hsl(var(--muted-foreground));
+      }
+      .badge {
+        padding: 0.0625rem 0.5rem;
+        border: 1px solid hsl(var(--border));
+        border-radius: 9999px;
+        line-height: 1.5;
+      }
+      .file {
+        opacity: 0.8;
+      }
+
+      /* ---------- hover 光边框（对应 magicui 的 BorderBeam） ---------- */
+      @keyframes border-beam {
+        to {
+          offset-distance: 100%;
+        }
+      }
+      .beam {
+        pointer-events: none;
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        border: 1.5px solid transparent;
+        opacity: 0;
+        transition: opacity 0.3s ease;
+        /* 只保留边框部分的遮罩 */
+        -webkit-mask-image: linear-gradient(transparent, transparent), linear-gradient(#fff, #fff);
+        mask-image: linear-gradient(transparent, transparent), linear-gradient(#fff, #fff);
+        -webkit-mask-clip: padding-box, border-box;
+        mask-clip: padding-box, border-box;
+        -webkit-mask-composite: source-in;
+        mask-composite: intersect;
+      }
+      .deck:hover .beam {
+        opacity: 1;
+      }
+      .beam::after {
+        content: "";
+        position: absolute;
+        aspect-ratio: 1 / 1;
+        width: 90px;
+        offset-path: rect(0 auto auto 0 round 90px);
+        offset-anchor: 90% 50%;
+        background: linear-gradient(to left, var(--accent-blue), var(--accent-yellow), transparent);
+        animation: border-beam 3s infinite linear;
+      }
+
+      /* ---------- 链接行 ---------- */
+      .link-row {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.25rem 0;
+        width: 100%;
+      }
+      .link-row .label {
+        display: inline-flex;
+        align-items: flex-end;
+        min-width: 82px;
+        line-height: 1;
+        text-underline-offset: 4px;
+        transition: transform 0.3s ease;
+      }
+      .link-row:hover .label {
+        transform: translateY(-2px);
+        text-decoration: underline;
+      }
+      .link-row .dash {
+        flex: none;
+        color: hsl(var(--muted-foreground));
+      }
+      .link-row .desc {
+        font-size: 0.875rem;
+        color: hsl(var(--muted-foreground));
+        transition: color 0.3s ease;
+      }
+      .link-row:hover .desc {
+        color: hsl(var(--foreground));
+      }
+
+      /* ---------- About ---------- */
+      .about-line {
+        position: relative;
+        display: flex;
+        align-items: center;
+        width: fit-content;
+        max-width: 100%;
+        padding: 0.25rem 0.5rem;
+        border-radius: 0.375rem;
+        overflow: hidden;
+      }
+      .about-line .c2,
+      .about-line .c1 {
+        position: absolute;
+        inset: 0;
+        z-index: 0;
+      }
+      .about-line .c2 {
+        background: #fef9c3;
+      }
+      .dark .about-line .c2 {
+        background: #fef08a;
+      }
+      .about-line .c1 {
+        background: #bfdbfe;
+        transform: translateY(100%);
+        transition: transform 0.3s ease;
+      }
+      .dark .about-line .c1 {
+        background: #93c5fd;
+      }
+      .about-line:hover .c1 {
+        transform: translateY(0);
+      }
+      .about-line .txt {
+        position: relative;
+        z-index: 1;
+        font-size: 0.875rem;
+        font-weight: 500;
+        color: hsl(0 0% 3.9%);
+      }
+      .skills {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-top: 0.5rem;
+      }
+      .skill {
+        display: flex;
+        align-items: center;
+        gap: 0.375rem;
+        padding: 0.375rem 0.625rem;
+        border: 1px solid hsl(var(--border));
+        border-radius: var(--radius);
+        font-size: 0.8125rem;
+        color: hsl(var(--muted-foreground));
+      }
+      .skill b {
+        font-weight: 500;
+        color: hsl(var(--foreground));
+      }
+
+      /* ---------- 页脚 ---------- */
+      footer {
+        margin-top: 1.25rem;
+        font-size: 0.75rem;
+        color: hsl(var(--muted-foreground));
+      }
+      footer a {
+        font-weight: 500;
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .fade,
+        .beam::after {
+          animation: none;
+        }
+        .fade {
+          opacity: 1;
+          transform: none;
+          filter: none;
+        }
+      }
+    </style>
+    <script>
+      // 在首次绘制前定好主题，避免闪白
+      (function () {
+        try {
+          var saved = localStorage.getItem("theme");
+          var dark = saved
+            ? saved === "dark"
+            : window.matchMedia("(prefers-color-scheme: dark)").matches;
+          document.documentElement.classList.toggle("dark", dark);
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+
+  <body>
+    <svg class="bg-grid" aria-hidden="true">
+      <defs>
+        <pattern id="grid" width="25" height="25" patternUnits="userSpaceOnUse" x="-1" y="-1">
+          <path d="M.5 25V.5H25" fill="none" stroke-dasharray="4 2" />
+        </pattern>
+      </defs>
+      <rect width="100%" height="100%" fill="url(#grid)" />
+    </svg>
+
+    <header class="fade" style="--i: 0">
+      <div class="head-row">
+        <img
+          class="avatar"
+          src="https://github.com/tortrixx.png"
+          alt="tortrixx"
+          onerror="this.remove()"
+        />
+        <span class="tagline">Less noise, more signal.</span>
+        <span class="spacer"></span>
+        <div class="head-actions">
+          <button id="themeToggle" class="icon-btn" aria-label="切换深浅色">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+              <path
+                class="icon-sun"
+                fill-rule="evenodd"
+                d="M12 17.5a5.5 5.5 0 1 0 0-11 5.5 5.5 0 0 0 0 11zm0 1.5a7 7 0 1 0 0-14 7 7 0 0 0 0 14zm12-7a.8.8 0 0 1-.8.8h-2.4a.8.8 0 0 1 0-1.6h2.4a.8.8 0 0 1 .8.8zM4 12a.8.8 0 0 1-.8.8H.8a.8.8 0 0 1 0-1.6h2.5a.8.8 0 0 1 .8.8zm16.5-8.5a.8.8 0 0 1 0 1l-1.8 1.8a.8.8 0 0 1-1-1l1.7-1.8a.8.8 0 0 1 1 0zM6.3 17.7a.8.8 0 0 1 0 1l-1.7 1.8a.8.8 0 1 1-1-1l1.7-1.8a.8.8 0 0 1 1 0zM12 0a.8.8 0 0 1 .8.8v2.5a.8.8 0 0 1-1.6 0V.8A.8.8 0 0 1 12 0zm0 20a.8.8 0 0 1 .8.8v2.4a.8.8 0 0 1-1.6 0v-2.4a.8.8 0 0 1 .8-.8zM3.5 3.5a.8.8 0 0 1 1 0l1.8 1.8a.8.8 0 1 1-1 1L3.5 4.6a.8.8 0 0 1 0-1zm14.2 14.2a.8.8 0 0 1 1 0l1.8 1.7a.8.8 0 0 1-1 1l-1.8-1.7a.8.8 0 0 1 0-1z"
+              />
+              <path
+                class="icon-moon"
+                fill-rule="evenodd"
+                d="M16.5 6A10.5 10.5 0 0 1 4.7 16.4 8.5 8.5 0 1 0 16.4 4.7l.1 1.3zm-1.7-2a9 9 0 0 1 .2 2 9 9 0 0 1-11 8.8 9.4 9.4 0 0 1-.8-.3c-.4 0-.8.3-.7.7a10 10 0 0 0 .3.8 10 10 0 0 0 9.2 6 10 10 0 0 0 4-19.2 9.7 9.7 0 0 0-.9-.3c-.3-.1-.7.3-.6.7a9 9 0 0 1 .3.8z"
+              />
+            </svg>
+          </button>
+          <a class="gh" href="https://github.com/tortrixx" target="_blank" rel="noreferrer">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path
+                d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"
+              />
+              <path d="M9 18c-4.51 2-5-2-7-2" />
+            </svg>
+            <span>tortrixx</span>
+          </a>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <!-- ================= 幻灯片 ================= -->
+      <section class="fade" style="--i: 1">
+        <h3>Slides <span class="count"><!--COUNT--></span></h3>
+        <!--SLIDES-->
+      </section>
+
+      <!-- ================= 链接 ================= -->
+      <section class="fade" style="--i: 2">
+        <h3>Links</h3>
+
+        <div class="link-row">
+          <a class="label" href="https://github.com/tortrixx/slides" target="_blank" rel="noreferrer">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 8px"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4" /><path d="M9 18c-4.51 2-5-2-7-2" /></svg>
+            SOURCE
+          </a>
+          <svg class="dash" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 12h14" /></svg>
+          <div class="desc">本仓库源码与工作流</div>
+        </div>
+
+        <div class="link-row">
+          <a class="label" href="https://github.com/tortrixx" target="_blank" rel="noreferrer">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 8px"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z" /><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" /><path d="M2 12h20" /></svg>
+            GITHUB
+          </a>
+          <svg class="dash" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 12h14" /></svg>
+          <div class="desc">代码、项目和公开资料</div>
+        </div>
+
+        <div class="link-row">
+          <a class="label" href="https://github.com/tortrixx/tortrixx" target="_blank" rel="noreferrer">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 8px"><circle cx="12" cy="12" r="10" /><path d="m16.24 7.76-1.804 5.411a2 2 0 0 1-1.265 1.265L7.76 16.24l1.804-5.411a2 2 0 0 1 1.265-1.265z" /></svg>
+            NAV
+          </a>
+          <svg class="dash" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 12h14" /></svg>
+          <div class="desc">个人导航页</div>
+        </div>
+      </section>
+
+      <!-- ================= 关于 ================= -->
+      <section class="fade" style="--i: 3">
+        <h3>About</h3>
+        <div class="about-line">
+          <span class="c2"></span>
+          <span class="c1"></span>
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="position: relative; z-index: 1; margin-right: 8px"><path d="M4.9 16.1C1 12.2 1 5.8 4.9 1.9" /><path d="M7.8 4.7a6.14 6.14 0 0 0-.8 7.5" /><circle cx="12" cy="9" r="2" /><path d="M16.2 4.8c2 2 2.26 5.11.8 7.47" /><path d="M19.1 1.9a9.96 9.96 0 0 1 0 14.1" /><path d="M9.5 18h5" /><path d="m8 22 4-11 4 11" /></svg>
+          <span class="txt">用 Typst + Touying 写幻灯片，推送后自动编译成 PDF 并发布。</span>
+        </div>
+        <div class="skills">
+          <span class="skill">排版 <b>Typst</b></span>
+          <span class="skill">主题 <b>Touying</b></span>
+          <span class="skill">构建 <b>GitHub Actions</b></span>
+          <span class="skill">托管 <b>GitHub Pages</b></span>
+        </div>
+      </section>
+    </main>
+
+    <footer class="fade" style="--i: 4">
+      Built by
+      <a href="https://typst.app" target="_blank" rel="noreferrer">Typst</a> &
+      <a href="https://github.com/touying-typ/touying" target="_blank" rel="noreferrer">Touying</a>.
+      本页由 GitHub Actions 自动生成 · <!--META-->
+    </footer>
+
+    <script>
+      // 深浅色切换（记住选择）
+      document.getElementById("themeToggle").addEventListener("click", function () {
+        var root = document.documentElement;
+        root.classList.toggle("dark");
+        try {
+          localStorage.setItem("theme", root.classList.contains("dark") ? "dark" : "light");
+        } catch (e) {}
+      });
+    </script>
+  </body>
+</html>

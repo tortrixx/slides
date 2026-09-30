@@ -193,54 +193,80 @@ jobs:
         run: |
           set -euo pipefail
 
-          {
-            cat <<'HTML_HEAD'
-          <!DOCTYPE html>
-          <html lang="zh-CN">
-          <head>
-          <meta charset="utf-8" />
-          <meta name="viewport" content="width=device-width, initial-scale=1" />
-          <title>Slides</title>
-          <style>
-            :root { color-scheme: light dark; }
-            body { margin: 0 auto; max-width: 46rem; padding: 2.5rem 1.25rem 4rem;
-                   font-family: system-ui, -apple-system, "Segoe UI", "Noto Sans CJK SC", sans-serif;
-                   line-height: 1.6; }
-            h1 { font-size: 1.75rem; margin-bottom: 0.25rem; }
-            p.sub { margin-top: 0; opacity: 0.65; }
-            ul { list-style: none; padding: 0; }
-            li { margin: 0.5rem 0; }
-            a { display: block; padding: 0.85rem 1rem; text-decoration: none; color: inherit;
-                border: 1px solid rgba(128, 128, 128, 0.35); border-radius: 10px;
-                transition: border-color 0.15s, background 0.15s; }
-            a:hover { border-color: currentColor; background: rgba(128, 128, 128, 0.1); }
-            a span { display: block; font-size: 0.85rem; opacity: 0.6; }
-            footer { margin-top: 2.5rem; font-size: 0.85rem; opacity: 0.6; }
-          </style>
-          </head>
-          <body>
-          <h1>Slides</h1>
-          <p class="sub">点击标题在线预览 PDF，或右键「另存为」下载。</p>
-          <ul>
-          HTML_HEAD
+          template="index.template.html"
+          [ -f "$template" ] || { echo "::error::缺少首页模板 ${template}"; exit 1; }
 
-            # 每个 PDF 生成一个链接（文件名即 slides/ 下的文件夹名）
-            for pdf in "$BUILD_DIR"/*.pdf; do
-              [ -e "$pdf" ] || continue
-              name="$(basename "$pdf" .pdf)"
-              printf '  <li><a href="%s.pdf">%s<span>%s.pdf</span></a></li>\n' "$name" "$name" "$name"
-            done
+          # ---------- 1) 为每套幻灯片生成一张卡片 ----------
+          items="$RUNNER_TEMP/slides-items.html"
+          : > "$items"
+          count=0
 
-            cat <<'HTML_TAIL'
-          </ul>
-          <footer>本页由 GitHub Actions 自动生成；在 slides/ 下新增文件夹并推送后会自动出现在这里。</footer>
-          </body>
-          </html>
-          HTML_TAIL
-          } > "$BUILD_DIR/index.html"
+          # 取 main.typ 里 config-info 的 title / subtitle（取不到就退回文件夹名）
+          pick() {
+            sed -nE "s/^[[:space:]]*$2:[[:space:]]*\[([^]]*)\].*/\1/p" "$1" | head -n 1
+          }
+          escape() {
+            sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+          }
 
-          echo "已生成 $BUILD_DIR/index.html："
-          cat "$BUILD_DIR/index.html"
+          for dir in slides/*/; do
+            [ -f "${dir}main.typ" ] || continue
+            name="$(basename "$dir")"
+            pdf="$BUILD_DIR/$name.pdf"
+            [ -e "$pdf" ] || continue
+            count=$((count + 1))
+
+            title="$(pick "${dir}main.typ" title)"
+            if [ -z "$title" ]; then
+              title="$(sed -nE 's/.*title:[[:space:]]*\[([^]]*)\].*/\1/p' "${dir}main.typ" | head -n 1)"
+            fi
+            [ -n "$title" ] || title="$name"
+
+            subtitle="$(pick "${dir}main.typ" subtitle)"
+            [ -n "$subtitle" ] || subtitle="点击卡片在线预览，或右键「另存为」下载"
+
+            bytes="$(wc -c < "$pdf" | tr -d ' ')"
+            if [ "$bytes" -ge 1048576 ]; then
+              size="$(awk -v b="$bytes" 'BEGIN { printf "%.1f MB", b / 1048576 }')"
+            else
+              size="$(awk -v b="$bytes" 'BEGIN { printf "%.0f KB", b / 1024 }')"
+            fi
+
+            title_html="$(printf '%s' "$title" | escape)"
+            subtitle_html="$(printf '%s' "$subtitle" | escape)"
+
+            # 卡片结构对应 index.template.html 里的 .deck 样式
+            cat <<HTML >> "$items"
+                  <div class="deck fade" style="--i: $count">
+                    <span class="bar"></span>
+                    <div class="deck-main">
+                      <a class="deck-title" href="${name}.pdf" target="_blank" rel="noreferrer">
+                        ${title_html}
+                        <svg class="ext" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6" /><path d="M10 14 21 3" /><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /></svg>
+                      </a>
+                      <div class="deck-desc">${subtitle_html}</div>
+                      <div class="deck-meta">
+                        <span class="badge">PDF</span>
+                        <span class="badge">${size}</span>
+                        <span class="file">${name}.pdf</span>
+                      </div>
+                    </div>
+                    <span class="beam"></span>
+                  </div>
+          HTML
+          done
+
+          # ---------- 2) 把生成结果套进模板 ----------
+          meta="最后更新 $(TZ="${RELEASE_TZ}" date '+%Y-%m-%d %H:%M') · 提交 ${GITHUB_SHA:0:7}"
+
+          awk -v items="$items" -v count="$count" -v meta="$meta" '
+            /<!--SLIDES-->/ { while ((getline line < items) > 0) print line; close(items); next }
+            /<!--COUNT-->/  { sub(/<!--COUNT-->/, count); print; next }
+            /<!--META-->/   { sub(/<!--META-->/, meta); print; next }
+            { print }
+          ' "$template" > "$BUILD_DIR/index.html"
+
+          echo "已生成 $BUILD_DIR/index.html（$count 套幻灯片，$(wc -c < "$BUILD_DIR/index.html" | tr -d ' ') bytes）"
 
       # 给 release job 下载用的普通产物（下载后仍是 build/xxx.pdf，便于直接用通配符上传）
       - name: 上传 PDF 产物
