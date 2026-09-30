@@ -3,6 +3,10 @@
 给在本仓库工作的 AI agent（以及未来的维护者）的技术说明。
 **面向使用者的精简说明在 [README.md](README.md)**，本文件放实现细节、约定和坑。
 
+> 文档分工（请务必遵守）：**README 只讲「怎么用」，保持极简**；
+> 所有注意事项、机制说明、踩坑记录都写在本文件。不要因为「用户可能不知道」就往 README 里加
+> 提示、警示、边角情况——需要时在本文件里写清楚，README 最多留一行指路。
+
 ---
 
 ## 1. 项目概览
@@ -99,9 +103,12 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
    - `#show regex(...)` 那条 CJK 缩放**不是必需**，A4 想要中英视觉平衡也可照加；
      字号走 11pt 左右（放映稿才是 20pt）。
    - 增量编译、按日期发版、首页列表对它一视同仁。
-   实测：A4 竖版 MediaBox 595.28×841.89pt；1 页 / 2 页都正常列出；与 3 套 Touying deck 混排
-   全部编译通过，只改其中一份时也只重编那一份。README「用 A4 文档」一节里的示例是**逐字编译验证过**的，
-   改 README 时请顺手再编一次。
+   最小可用模板（已逐字编译验证，产出 595.28×841.89pt 的 A4）：
+   `#set document(title: "…")` + `#set page(paper: "a4", margin: (x: 2.2cm, y: 2cm), numbering: "1")`
+   + `#set text(font: ((name: "Inter", covers: "latin-in-cjk"), "Noto Sans CJK SC"), size: 11pt, lang: "zh", region: "cn")`
+   + `#set heading(numbering: "1.")`，然后正常写 `= 一级标题` 与正文。
+   实测：1 页 / 2 页都正常列出；与 3 套 Touying deck 混排全部编译通过，只改其中一份时也只重编那一份。
+   这些注意事项**只写在本文件**，README 保持极简（见文首的文档分工规则）。
 
 ## 4. CI/CD（`.github/workflows/build-and-deploy.yml`）
 
