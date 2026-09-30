@@ -46,6 +46,9 @@ jobs:
   build:
     name: 编译幻灯片
     runs-on: ubuntu-latest
+    # 删除 tag / 分支同样会产生 push 事件（deleted: true）。必须忽略，
+    # 否则删掉 v1.0.0 之后工作流会认为「该版本不存在」而把它重新创建出来。
+    if: github.event.deleted != true
     steps:
       - name: 检出仓库
         uses: actions/checkout@v7
@@ -282,9 +285,10 @@ jobs:
     name: 自动发版本并上传 PDF
     needs: build
     if: >-
-      github.event_name == 'release'
+      github.event.deleted != true
+      && (github.event_name == 'release'
       || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-      || (github.event_name == 'push' && github.ref_type == 'tag')
+      || (github.event_name == 'push' && github.ref_type == 'tag'))
     runs-on: ubuntu-latest
     # 发布 Release 时 GitHub 会同时产生 tag push 事件，可能让本工作流跑两次并操作
     # 同一个 Release；用同一个 concurrency group 把两次运行串行化，避免并发冲突。
