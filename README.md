@@ -4,9 +4,9 @@
 每套幻灯片放在 `slides/` 下的一个独立文件夹里，推送到 `main` 后由 GitHub Actions 自动：
 
 1. 安装模板里用到的字体（Noto Sans CJK SC / Inter）；
-2. 编译所有 `slides/*/main.typ` 为 PDF；
+2. 编译 `slides/*/main.typ` 为 PDF（只重编改动过的幻灯片）；
 3. 生成导航页并部署到 **GitHub Pages**；
-4. 打 tag / 发布 Release 时，把所有 PDF 作为附件上传到该 Release。
+4. **自动发版本**：自动把版本号 +1 并创建 GitHub Release，把全部 PDF 作为附件传上去。
 
 ## 访问地址
 
@@ -61,7 +61,7 @@ git push -u origin main
 ### 3. 等待自动构建
 
 推送后到仓库的 **Actions** 标签页可以看到 “Build & Deploy Slides” 正在运行
-（首次因为要下载中文字体，约 2 分钟）。完成后访问
+（首次因为要下载中文字体，约 1～2 分钟）。完成后访问
 <https://tortrixx.github.io/slides/> 即可看到导航页。
 
 > 第一次部署完成后，如果 Pages 页面显示 404，等 1～2 分钟再刷新即可。
@@ -131,31 +131,47 @@ typst watch main.typ          # 保存即自动重新编译
 安装 Typst：`brew install typst`（macOS）或见 <https://github.com/typst/typst#installation>。
 本地版本建议与工作流中的 `TYPST_VERSION` 保持一致（当前为 `0.15.1`）。
 
-## 发布 Release（附带所有 PDF）
+## 自动发版本（不需要手动打 tag）
 
-两种方式都会触发：
+每次推送到 `main` 且构建成功后，工作流会：
 
-```bash
-# 方式一：打 tag 并推送（tag 以 v 开头才会触发，例如 v1.0 / v2026.09.30）
-git tag v1.0
-git push origin v1.0
-```
+1. 取仓库里已有的 `vX.Y.Z` 标签中最大的那个，把 patch 号 +1（一个都没有就从 `v1.0.0` 开始）；
+2. 用这个版本号自动创建 tag 和 GitHub Release（自动创建的 tag 指向本次构建的提交）；
+3. 把 `build/` 下所有 PDF 作为附件上传。
 
-- 方式二：在仓库 **Releases → Draft a new release** 里选择/新建 tag 并 **Publish release**。
+所以正常开发只要 `git push`，不用管 tag：
 
-随后工作流会自动创建（或更新）对应 Release，并把 `build/` 下所有 PDF 作为附件上传。
-编译时会检出该 tag 对应的代码，所以 Release 里的 PDF 就是那个版本的内容。
+| 你的操作 | 结果 |
+| --- | --- |
+| 第一次 push 到 `main` | 自动发 `v1.0.0` |
+| 之后每次 push 到 `main` | 自动发 `v1.0.1`、`v1.0.2`… |
+| 手动 `git tag v2.0.0 && git push origin v2.0.0` | 用你指定的 `v2.0.0` 发版本，不再自动 +1 |
+| 在网页上编辑 / 发布 Release | 把最新的 PDF 补传到该 Release |
 
-> 工作流**不会**改动你写的 Release 说明（不开启自动生成更新日志）：因为在网页上发布
+> 工作流**不会**改动你写的 Release 说明（没有开启自动生成更新日志）：在网页上发布
 > Release 会同时产生一次 tag push，自动生成的说明可能被追加到你手写的内容后面。
 > 若确实想用自动更新日志，在 workflow 的 release 步骤里加 `generate_release_notes: true`。
+
+## 增量编译（只重编改动过的幻灯片）
+
+`build/` 目录会用 [actions/cache](https://github.com/actions/cache) 缓存下来，每次
+推送到 `main` 时：
+
+- 用 `git diff` 找出这次 push 改动了哪些 `slides/<名称>/`；
+- **只重新编译这些幻灯片**，其余直接复用缓存里的 PDF；
+- 缓存里缺的 PDF（首次运行、缓存被清理）会自动补编译，不会漏；
+- 被删除或改名的幻灯片，残留的旧 PDF 会被自动清理，不会继续留在站点上。
+
+tag 推送 / 发布 Release / 手动运行一律**全量编译**，保证发出去的是完整产物。
+如果某次增量结果不符合预期，删掉缓存（**Actions → Caches**）再跑一次即可。
 
 ## 手动触发一次构建
 
 **Actions → Build & Deploy Slides → Run workflow**，记得分支选择 `main`：
 
-- 选 `main`：编译 + 部署 Pages；
-- 选其它分支：只编译和上传产物，**不会**部署线上站点，也不会创建 Release。
+- 选 `main`：全量编译 + 部署 Pages；
+- 选其它分支：只编译和上传产物，**不会**部署线上站点；
+- 手动运行**不会**创建 Release。
 
 ## 字体（模板已自动安装）
 
@@ -163,15 +179,16 @@ git push origin v1.0
 
 | 用途 | 字体 | 来源 |
 | --- | --- | --- |
-| 中文 | Noto Sans CJK SC | `fonts-noto-cjk` / `fonts-noto-cjk-extra` |
+| 中文 | Noto Sans CJK SC | `fonts-noto-cjk` |
 | 西文 | Inter | `fonts-inter` |
 | 数学 | New Computer Modern Math | Typst 自带，无需安装 |
 
 说明：
 
 - 字体缺失**不会**让编译失败，但中文会缺字或回退，所以默认就装好；
-- `fonts-noto-cjk-extra` 提供 Medium / Light 等更多字重（模板里用到了
-  `weight: "medium"`）。想加快构建可以删掉它，只留 `fonts-noto-cjk`；
+- 为了加快构建，**没有**安装 `fonts-noto-cjk-extra`（它要额外下载约 145MB）。
+  因此 `weight: "medium"` 之类的中间字重会回退到 Regular / Bold；
+  确实需要更多中文字重时，把它加回 workflow 里「安装模板字体」那一步的列表即可；
 - 纯英文仓库可以把 workflow 里「安装模板字体」整个步骤删掉，约省 1 分钟；
 - 想用别的字体（思源黑体、霞鹜文楷、Fira Code…）：把字体文件放进仓库，
   例如 `fonts/`，然后给编译命令加 `--font-path`：
@@ -189,9 +206,9 @@ git push origin v1.0
 
 | job | 触发条件 | 权限 | 作用 |
 | --- | --- | --- | --- |
-| `build` | 任何触发都会运行 | `contents: read` | 装字体、编译所有幻灯片、生成 `build/index.html`、上传产物 |
+| `build` | 任何触发都会运行 | `contents: read` | 装字体、**增量**编译幻灯片、生成 `build/index.html`、上传产物 |
 | `deploy` | `main` 分支的 push / 在 `main` 上手动运行 | `pages: write`, `id-token: write` | 部署 `build/` 到 GitHub Pages |
-| `release` | 推送 tag / 发布 Release | `contents: write` | 把 PDF 上传到对应 Release |
+| `release` | push 到 `main` / 推送 `v*` tag / 发布 Release | `contents: write` | 计算版本号并创建 Release，上传全部 PDF |
 
 触发条件：`push` 到 `main`、推送 `v*` tag、`release: published`、以及 `workflow_dispatch`。
 `deploy` 用固定的 `pages` concurrency group 串行化，`release` 用每个 tag 一个 group，
@@ -212,6 +229,14 @@ git push origin v1.0
 
 **想推送任意 tag 都能发 Release？**
 把 workflow 里的 `tags: ["v*"]` 改成 `tags: ["**"]`（匹配所有 tag）。
+
+**不想每次 push 都自动发版本？**
+把 `release` job 的 `if:` 里 `(github.event_name == 'push' && github.ref == 'refs/heads/main')`
+这一段删掉，就回到「只有手动 tag / 发布 Release 才发版本」。
+
+**想改版本号规则（比如按日期）？**
+改 `release` job 里「计算版本号」那一步：把 `tag="v${major}.${minor}.$((patch + 1))"`
+换成比如 `tag="v$(date -u +%Y.%m.%d)-${GITHUB_RUN_NUMBER}"` 即可。
 
 **`build/` 目录需要提交吗？**
 不需要，它由 CI 生成，已在 `.gitignore` 中忽略。

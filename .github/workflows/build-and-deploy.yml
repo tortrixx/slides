@@ -1,32 +1,39 @@
 # =============================================================================
-# 自动编译所有 slides/*/main.typ → PDF，部署到 GitHub Pages，并在打 tag /
-# 发布 Release 时把 PDF 作为附件上传到 Release。
+# 自动编译所有 slides/*/main.typ → PDF，部署到 GitHub Pages，并自动发版本
+# （把 PDF 作为附件上传到 GitHub Release）。
 #
 # 目录约定：
 #   slides/<名称>/main.typ  →  https://<用户名>.github.io/<仓库名>/<名称>.pdf
 #   首页（自动生成的导航页）→  https://<用户名>.github.io/<仓库名>/
 #
 # 三个 job 各司其职，权限互不重叠：
-#   build   → 安装字体 + 编译 PDF + 生成导航页 + 上传产物   （contents: read）
-#   deploy  → 把 build/ 目录发布到 GitHub Pages             （pages/id-token: write）
-#   release → 把 PDF 上传到对应的 GitHub Release            （contents: write）
+#   build   → 装字体 + 编译 PDF（增量）+ 生成导航页 + 上传产物   （contents: read）
+#   deploy  → 把 build/ 目录发布到 GitHub Pages                 （pages/id-token: write）
+#   release → 自动生成版本号并创建 Release，附上全部 PDF          （contents: write）
+#
+# 你不需要手动打 tag：每次推送到 main 且构建成功后，release job 会自动
+# 把「最新的 vX.Y.Z」的 patch 号 +1（没有则从 v1.0.0 开始）并创建 Release。
+# 想指定版本号时，手动打 tag 推送即可（例如 v2.0.0），release job 会直接用它。
 # =============================================================================
 
 name: Build & Deploy Slides
 
 on:
   push:
-    branches: [main] # 推送到 main 即自动编译并部署 Pages
-    tags: ["v*"] # 推送 v1.0 / v2026.09.30 之类的 tag 时，额外上传 Release
+    branches: [main] # 推送到 main：编译 + 部署 Pages + 自动发版本
+    tags: ["v*"] # 手动推送 tag：编译 + 用这个 tag 发版本（不重新部署 Pages）
   release:
-    types: [published] # 在网页上「发布 Release」时也触发一次
-  workflow_dispatch: # 支持在 Actions 页面手动运行
+    types: [published] # 在网页上「发布 Release」时也把 PDF 补传上去
+  workflow_dispatch: # 支持在 Actions 页面手动运行（只构建/部署，不发版本）
 
 env:
   # Typst 版本。锁版本可保证构建可复现；想始终用最新稳定版可改成 latest
   TYPST_VERSION: "0.15.1"
   # 编译产物目录（Pages 站点根目录）
   BUILD_DIR: build
+  # push 事件的「上一次提交」，用于判断哪些幻灯片需要重新编译；
+  # 其它事件（手动运行 / tag / release）取不到，会走全量编译。
+  BEFORE_SHA: ${{ github.event.before }}
 
 # 默认最小权限；需要更高权限的 job 会在下面单独声明
 permissions:
@@ -34,7 +41,7 @@ permissions:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # 1) 安装字体、编译所有幻灯片，并准备好 Pages 站点内容
+  # 1) 安装字体、编译幻灯片（增量）、准备好 Pages 站点内容
   # ---------------------------------------------------------------------------
   build:
     name: 编译幻灯片
@@ -47,18 +54,19 @@ jobs:
           # release 事件下不同来源对 github.ref 的描述不一致，这里显式优先用
           # 被发布 Release 的 tag，保证「Release 里的 PDF」就是该 tag 的代码。
           ref: ${{ github.event.release.tag_name || github.ref }}
+          # 增量编译要对比「上一次提交」，所以需要完整历史（仓库很小，代价可忽略）
+          fetch-depth: 0
 
       # 模板里指定的字体（见 slides/*/main.typ 的 #set text）：
       #   Noto Sans CJK SC → 中文；Inter → 西文；New Computer Modern Math 由 Typst 自带。
       # 不装字体也能编译成功，但中文会缺字/回退，所以这里默认装好。
-      # 纯英文仓库想加快构建，可以整段删掉或注释掉（约省 1 分钟）。
       - name: 安装模板字体（Noto Sans CJK SC / Inter）
         run: |
           sudo apt-get update
-          # -extra 提供 Medium/Light 等更多 CJK 字重（模板里用到了 weight: "medium"）；
-          # 万一某些包不可用，至少保证基础 CJK 字体装上，避免整段失败。
-          sudo apt-get install -y --no-install-recommends \
-            fonts-noto-cjk fonts-noto-cjk-extra fonts-inter \
+          # 说明：这里故意不装 fonts-noto-cjk-extra —— 它要额外下载约 145MB，
+          # 而模板只用到 Regular / Bold。若确实需要 Light / Medium 等更多中文字重，
+          # 把 fonts-noto-cjk-extra 加回下面的列表即可。
+          sudo apt-get install -y --no-install-recommends fonts-noto-cjk fonts-inter \
             || sudo apt-get install -y --no-install-recommends fonts-noto-cjk
           fc-cache -f
 
@@ -73,6 +81,18 @@ jobs:
           # .typ 文件即可缓存宏包（该输入只接受单个可编译的文件，不支持通配符）。
           # 需要时见 README「进阶：缓存 @preview 宏包」一节。
 
+      # 增量编译的核心：把上一次的 build/ 目录取回来。
+      # 没改动的幻灯片直接复用里面的 PDF，只重新编译改动过的那些。
+      # 只有 main 分支的 push 才走增量；tag / release / 手动运行都全量编译。
+      - name: 恢复上次的编译产物（增量编译用）
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.BUILD_DIR }}
+          key: slides-build-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            slides-build-${{ github.ref_name }}-
+
       - name: 编译 slides/*/main.typ → build/*.pdf
         run: |
           set -uo pipefail
@@ -80,38 +100,87 @@ jobs:
           build_dir="$PWD/$BUILD_DIR"
           mkdir -p "$build_dir"
 
+          # ---------- 1) 判断这次是增量还是全量 ----------
+          # 只有「push 到 main 且能拿到上一次提交」时才增量；
+          # tag / release / 手动运行一律全量，保证发出去的是一份完整产物。
+          full_rebuild=1
+          changed=""
+          if [ "${GITHUB_EVENT_NAME:-}" = "push" ] \
+             && [ "${GITHUB_REF:-}" = "refs/heads/main" ] \
+             && [ -n "${BEFORE_SHA:-}" ] \
+             && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ] \
+             && git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
+            full_rebuild=0
+            changed="$(git diff --name-only "$BEFORE_SHA" "$GITHUB_SHA" -- slides || true)"
+            echo "增量编译：本次 push 改动了以下文件"
+            if [ -n "$changed" ]; then printf '%s\n' "$changed" | sed 's/^/  /'; else echo "  （slides/ 下没有改动）"; fi
+          else
+            echo "全量编译：tag / release / 手动运行，或拿不到上一次提交"
+          fi
+
+          # ---------- 2) 逐套幻灯片编译 ----------
+          names_file="$(mktemp)"
           found=0
           failed=0
+          rebuilt=0
+          reused=0
+
           for dir in slides/*/; do
             # 只处理包含 main.typ 的子目录，其他目录自动忽略
             [ -f "${dir}main.typ" ] || continue
             found=1
             name="$(basename "$dir")"
+            printf '%s\n' "$name" >> "$names_file"
 
-            echo "::group::编译 $name"
-            # 关键：先进入幻灯片所在目录再编译，
-            # 这样 main.typ 里的相对路径（如 image("src/xxx.png")）才能正确解析。
-            if (cd "$dir" && typst compile main.typ "$build_dir/$name.pdf"); then
-              echo "✅ $name → $BUILD_DIR/$name.pdf"
-            else
-              echo "::error::幻灯片 $name 编译失败，请检查 ${dir}main.typ"
-              failed=1
+            # 需要重新编译：全量编译、缓存里没有这份 PDF、或该目录这次有改动
+            need=1
+            if [ "$full_rebuild" -eq 0 ] && [ -f "$build_dir/$name.pdf" ]; then
+              if ! printf '%s\n' "$changed" | grep -qF -- "$dir"; then
+                need=0
+              fi
             fi
-            echo "::endgroup::"
+
+            if [ "$need" -eq 1 ]; then
+              echo "::group::编译 $name"
+              # 关键：先进入幻灯片所在目录再编译，
+              # 这样 main.typ 里的相对路径（如 image("src/xxx.png")）才能正确解析。
+              if (cd "$dir" && typst compile main.typ "$build_dir/$name.pdf"); then
+                echo "✅ $name → $BUILD_DIR/$name.pdf"
+                rebuilt=$((rebuilt + 1))
+              else
+                echo "::error::幻灯片 $name 编译失败，请检查 ${dir}main.typ"
+                failed=1
+              fi
+              echo "::endgroup::"
+            else
+              echo "⏭️  $name 没有改动，复用 $BUILD_DIR/$name.pdf"
+              reused=$((reused + 1))
+            fi
           done
 
+          # ---------- 3) 清理被删除 / 改名后残留的旧 PDF ----------
+          for pdf in "$build_dir"/*.pdf; do
+            [ -e "$pdf" ] || continue
+            n="$(basename "$pdf" .pdf)"
+            if ! grep -qxF -- "$n" "$names_file"; then
+              echo "🧹 删除已不存在的幻灯片产物：$n.pdf"
+              rm -f "$pdf"
+            fi
+          done
+          rm -f "$names_file"
+
+          # ---------- 4) 结果校验 ----------
           if [ "$found" -eq 0 ]; then
             echo "::error::没有找到任何 slides/*/main.typ，请先添加幻灯片。"
             exit 1
           fi
-
           # 有任何一份编译失败就终止，避免把不完整的站点发布出去
           if [ "$failed" -ne 0 ]; then
             echo "::error::存在编译失败的幻灯片，已停止后续部署。"
             exit 1
           fi
 
-          echo "编译完成，产物如下："
+          echo "编译完成：新编译 $rebuilt 套，复用 $reused 套"
           ls -lh "$build_dir"
 
       - name: 生成导航页 build/index.html
@@ -184,7 +253,7 @@ jobs:
   # ---------------------------------------------------------------------------
   # 2) 部署到 GitHub Pages
   #    只在 main 分支的 push / 手动运行（且手动运行时也选的 main）才部署；
-  #    tag 推送和 release 事件只出 Release，不动线上站点。
+  #    tag 推送和 release 事件只发版本，不动线上站点。
   # ---------------------------------------------------------------------------
   deploy:
     name: 部署到 GitHub Pages
@@ -207,23 +276,63 @@ jobs:
         uses: actions/deploy-pages@v5
 
   # ---------------------------------------------------------------------------
-  # 3) 打 tag / 发布 Release 时，把 PDF 上传到对应 Release
+  # 3) 自动发版本：算出版本号 → 创建/更新 Release → 把 PDF 全部传上去
   # ---------------------------------------------------------------------------
   release:
-    name: 上传 PDF 到 Release
+    name: 自动发版本并上传 PDF
     needs: build
-    # 只认「push 一个 tag」和「发布 Release」两件事；
-    # 从 tag 手动运行（workflow_dispatch）不会创建 Release。
-    if: github.event_name == 'release' || (github.event_name == 'push' && github.ref_type == 'tag')
+    if: >-
+      github.event_name == 'release'
+      || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      || (github.event_name == 'push' && github.ref_type == 'tag')
     runs-on: ubuntu-latest
-    # 在网页上「发布 Release」会同时产生 tag push 事件，可能让本工作流跑两次并操作同一个
-    # Release；用同一个 concurrency group 把两次运行串行化，避免并发上传附件互相冲突。
+    # 发布 Release 时 GitHub 会同时产生 tag push 事件，可能让本工作流跑两次并操作
+    # 同一个 Release；用同一个 concurrency group 把两次运行串行化，避免并发冲突。
     concurrency:
       group: release-${{ github.event.release.tag_name || github.ref_name }}
       cancel-in-progress: false
     permissions:
-      contents: write # 创建/更新 Release 并上传附件
+      contents: write # 创建 tag / Release 并上传附件
     steps:
+      # 版本号规则：
+      #   * main 推送          → 取现有 vX.Y.Z 里最大的那个，patch +1（没有则 v1.0.0）
+      #   * 手动推送 v* tag     → 直接用该 tag
+      #   * release 事件        → 用该 Release 的 tag
+      - name: 计算版本号
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+
+          if [ "${GITHUB_EVENT_NAME}" = "release" ] && [ -n "${RELEASE_TAG}" ]; then
+            tag="${RELEASE_TAG}"
+            echo "使用 Release 自带的 tag：$tag"
+          elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag="${GITHUB_REF_NAME}"
+            echo "使用本次推送的 tag：$tag"
+          else
+            latest="$(gh api "repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/v" \
+                        --paginate --jq '.[].ref' 2>/dev/null \
+                      | sed 's|^refs/tags/||' \
+                      | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+                      | sort -V | tail -n 1 || true)"
+            if [ -z "$latest" ]; then
+              tag="v1.0.0"
+            else
+              ver="${latest#v}"
+              major="${ver%%.*}"
+              rest="${ver#*.}"
+              minor="${rest%%.*}"
+              patch="${rest#*.}"
+              tag="v${major}.${minor}.$((patch + 1))"
+            fi
+            echo "自动版本号：${tag}（上一个版本：${latest:-无}）"
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
       - name: 下载编译产物
         uses: actions/download-artifact@v8
         with:
@@ -233,8 +342,10 @@ jobs:
       - name: 创建 / 更新 Release 并上传 PDF
         uses: softprops/action-gh-release@v3
         with:
-          # push tag 时用 tag 名；release 事件时用该 Release 自己的 tag
-          tag_name: ${{ github.event.release.tag_name || github.ref_name }}
+          # tag 不存在时（main 自动发版本）会由本步骤自动创建
+          tag_name: ${{ steps.version.outputs.tag }}
+          # 自动创建 tag 时，指向本次构建的那个提交
+          target_commitish: ${{ github.sha }}
           files: ${{ env.BUILD_DIR }}/*.pdf
           fail_on_unmatched_files: true
           # 这里故意不开 generate_release_notes：发布 Release 会伴随一次 tag push，
