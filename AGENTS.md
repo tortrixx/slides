@@ -82,9 +82,9 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
 6. 主题切换：`themes.metropolis` → `themes.simple` / `themes.university` 等。
    注意 `themes.simple` 的封面必须写 `#title-slide[标题]`，metropolis 可以直接 `#title-slide()`。
 7. 包版本固定：touying 0.8.0（要求 Typst ≥ 0.15.0）、numbly 0.1.0、pinit 0.2.2。
-8. **文件夹名即 URL**：只允许 **汉字 / 字母 / 数字 / `.` / `_` / `-`**。编译步骤会检查，
-   出现空格、引号、`&`、`#`、`?` 等字符会直接 `::error::` 并退出（避免坏链接、坏 HTML、
-   坏 Markdown）。改名会改变 PDF 链接，等于换 URL，旧链接会 404。
+8. **文件夹名即 URL**：允许 **字母 / 数字 / `.` / `_` / `-`** 以及**任何非 ASCII 字符**
+   （汉字、假名、emoji 都行）；禁止空格和其余 ASCII 符号。编译步骤会检查，违规直接
+   `::error::` 并退出（否则会做出坏链接、坏 HTML、坏 Markdown）。改名等于换 URL，旧链接会 404。
 
 ## 4. CI/CD（`.github/workflows/build-and-deploy.yml`）
 
@@ -113,19 +113,29 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
 - **字体**：`apt-get install fonts-noto-cjk fonts-inter`（取不到时降级为只装 CJK）。
   故意**不装** `fonts-noto-cjk-extra`（多 145MB），代价是 `weight: "medium"` 之类中间字重回退。
 - **增量编译**：`actions/cache@v6` 以 `slides-build-main-<run_id>` 为 key、`slides-build-main-`
-  为 restore-keys 缓存 `build/`。编译脚本逐套判断：全量 / 缓存缺 PDF / 该目录在
-  `git diff --name-only <BEFORE_SHA> <GITHUB_SHA> -- slides` 里出现过 → 重编，否则复用。
+  为 restore-keys 缓存 `build/`。逐套判断：全量 / 缓存缺 PDF / 该目录相对**基准提交**有改动 → 重编。
   最后清理「`slides/<名称>/main.typ` 已不存在」的残留 PDF。
+  基准**不是** `github.event.before`，而是缓存目录里 `.build-stamp` 记的**上一次真正编译成功的提交**：
+  ```
+  <sha> <TYPST_VERSION> <workflow 文件哈希>
+  ```
+  为什么不用 `before`：它只覆盖本次 push。若上一次运行失败（缓存没存下）或两次 push 挨得很近，
+  那一次改过的 deck 就既不在 diff 里、缓存里又是旧 PDF，会被**永久复用成旧版本**且不会自愈
+  （已实测复现，两份独立审查也都指出过）。用 stamp 作基准，差异永远是「相对上次成功编译」，
+  而编译失败时不会写 stamp，所以失败的下一次 push 必然把那些 deck 重新编译一遍。
+  另两个字段用来在**编译环境变化**（Typst 版本、workflow 里的字体/编译参数）时强制全量。
+  stamp 是 `build/` 里的隐藏文件：只进 patch 缓存，不进 artifact、不进 Pages。
   tag / release / 手动运行一律全量编译。
 - **导航页**：`index.template.html` 是首页模板（版式/样式都在里面），workflow 只负责
   注入数据，产物 `build/index.html` 是**服务端渲染**的静态页（无 JS 也能看）。
   三处占位注释由 `awk` 替换：`SLIDES`（卡片列表）、`COUNT`（套数）、`META`（更新时间+提交号）。
   卡片数据来源：
-  - **标题/副标题**：`sed` 从各 deck 的 `config-info(...)` 里取 `title:` / `subtitle:`，
-    先按「键单独占一行」匹配，再按单行写法匹配（模式里要求键前面不是字母或下划线，
-    否则 `subtitle:` 里的 `title:` 会被贪婪匹配成标题——实测踩过）；
-    取不到时标题退回文件夹名、副标题退回一句默认文案。
-  - **链接与文件名**：`<文件夹名>.pdf`（与 `title` 无关），大小由 `wc -c` 换算。
+  - **标题/副标题**：`sed` 从各 deck 的 `config-info(...)` 里取 `title:` / `subtitle:`，依次尝试
+    `[..]` 单独成行 → 单行里的 `[..]` → `".."` 字符串写法；**跳过注释行**（否则
+    `// title: [旧标题]` 会中选），单行模式要求键前面不是字母/下划线（否则 `subtitle:` 里的
+    `title:` 会被贪婪匹配成标题——实测踩过）。取不到时标题退回文件夹名、副标题退回默认文案。
+  - **链接与文件名**：`<文件夹名>.pdf`（与 `title` 无关）；大小由 `wc -c` 换算，
+    分 B / KB / MB 三档（不足 1 MiB 时封顶 1023，避免出现 "1024 KB"）。
   - **转义**：文件夹名与标题/副标题都会做 HTML 转义（`&` `<` `>` `"`），
     文件夹名另有字符集护栏（见 §3.8），两道一起保证生成的 HTML 不会被名字搞坏。
   - 标题按**原文**显示：Typst 标记（`*粗体*`、反引号）不会被渲染，也不会被剥离。
@@ -137,10 +147,11 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
   装饰性动效都做了降级：光带用 `@supports (offset-path: rect(...))` 包住（不支持就整条不显示，
   否则会在左上角糊一块渐变色），`prefers-reduced-motion: reduce` 时关闭淡入并隐藏光带，
   键盘焦点用 `:focus-visible` 描边。改 CSS 时请保留这些降级。
-- **产物**：`slides-build`（普通 artifact，给 release job 下载，`retention-days: 1`）+
-  `github-pages`（`actions/upload-pages-artifact@v5`，给 deploy job）。两份都只在同一次
-  运行内使用，所以保留期都压到最短，避免长期堆积。`index.template.html` 在仓库根，
-  不会进站点（只上传 `build/`）。
+- **产物**：`slides-build`（普通 artifact，给 release job 下载，`retention-days: 3`）+
+  `github-pages`（`actions/upload-pages-artifact@v5`，给 deploy job，自带 1 天保留期）。
+  两份都只在同一次运行内使用，所以保留期压得很短，避免长期堆积；留 3 天是为了隔天
+  「Re-run failed jobs」时还取得到产物。`index.template.html` 在仓库根，不会进站点
+  （只上传 `build/`）。
 
 ### release 细节
 
@@ -233,10 +244,10 @@ CI 逻辑全在 YAML 的 `run: |` 里，改完不能只靠肉眼。推荐流程�
 - GitHub 上「发布 Release」会**同时**产生 tag push 事件，可能让 workflow 跑两次；
   release job 的 concurrency group 会串行化它们。
 - 用 `GITHUB_TOKEN` 创建 tag 不会触发新的 workflow run，所以按日期发版不会自激。
-- **增量编译的判断只看 `slides/<名称>/` 是否在 diff 里**。所以改了「编译参数」（字体、
-  `--font-path`、Typst 版本）或仓库级公共文件时，没动过的 deck 会继续复用缓存里的旧 PDF。
-  这类改动之后，请到 **Actions → Caches** 删掉 `slides-build-main-*` 再跑一次，或随便
-  碰一下那些 deck（例如给 `main.typ` 加个空行）。
+- 改 workflow 里的**编译相关参数**（Typst 版本、装哪些字体、`--font-path`）会自动触发全量编译
+  （stamp 里存了 workflow 哈希）。但如果是**外部**变化——例如 apt 上的字体包本身升级、
+  Typst 上游改了默认字体——哈希不变，未改动的 deck 仍复用旧 PDF。这种极少见的情况才需要
+  到 **Actions → Caches** 删掉 `slides-build-main-*` 再跑一次。
 - Release 说明里的站点链接是按「项目页」拼出来的（`<owner>.github.io/<repo>/`）。若以后
   换成自定义域名，这段（以及首页里的相对链接之外的地方）需要同步改。
 - 首页的卡片标题是**纯文本**：deck 里 `title: [*粗体*]` 会原样显示星号，不会渲染成粗体。
@@ -248,3 +259,9 @@ CI 逻辑全在 YAML 的 `run: |` 里，改完不能只靠肉眼。推荐流程�
 - 首页目前只显示标题/副标题/大小；想要页数、封面缩略图或每套 deck 的自定义描述，
   可以在 index 生成步骤里扩展（页数可解析 PDF，缩略图可用 `typst compile --format png` 首先生成）。
 - `fonts-noto-cjk-extra` 需要时加回即可（换更多中文字重）。
+- 存储会随「每天一个 Release」线性增长：每次 Release 都保存一套完整 PDF 且不会自动清理。
+  公开仓库的 Actions 存储免费，所以这是「慢」而不是「贵」的问题；真开始嫌大时，可以只上传
+  本次重编的 PDF，或定期 `gh release delete --cleanup-tag` 清掉旧的日期版本。
+- `setup-typst@v5` 与 `softprops/action-gh-release@v3` 目前按主版本号引用（可读性好、自动收补丁）。
+  若要更强的供应链保证，可以把这两个第三方 action 固定到 commit SHA，并让 Dependabot 升级。
+- 首页的标题层级：`h1` 是标语，`h2` 是 `Slides`；改动时别把唯一的主标题弄丢。

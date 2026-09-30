@@ -47,8 +47,9 @@ Typst 的安装见[官方说明](https://github.com/typst/typst#installation)，
 ## 常见问题
 
 **推送后没有触发构建？**
-默认分支不是 `main` 的话，把 workflow 里的 `branches: [main]` 和 `if` 中的
-`refs/heads/main` 一起改成你的分支名。
+默认分支不是 `main` 的话，要把 workflow 里**全部 5 处**一起改掉：`branches: [main]`，
+以及 4 处 `refs/heads/main`（3 处在 `if`，1 处在 `run:` 的增量判断里——漏掉它会导致
+每次都全量编译，不会报错但会明显变慢）。
 
 **`deploy` 报错说 Pages 未启用？**
 Settings → Pages → Build and deployment → Source 选 **GitHub Actions**。

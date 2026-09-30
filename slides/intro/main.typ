@@ -11,7 +11,7 @@
 //   * 数学公式：New Computer Modern Math（Typst 自带）
 //   * 标题编号：numbly
 //   * 重点标注：pinit
-// 这些字体在 GitHub Actions 里由 workflow 自动安装，详见 README「中文字体」。
+// 这些字体在 GitHub Actions 里由 workflow 自动安装，详见 AGENTS.md「build 细节」。
 // =============================================================================
 
 #import "@preview/touying:0.8.0": *

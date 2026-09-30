@@ -107,21 +107,36 @@ jobs:
           mkdir -p "$build_dir"
 
           # ---------- 1) 判断这次是增量还是全量 ----------
-          # 只有「push 到 main 且能拿到上一次提交」时才增量；
-          # tag / release / 手动运行一律全量，保证发出去的是一份完整产物。
+          # 复用基准是「上一次真正编译成功时的提交」，记在缓存目录里的 .build-stamp，
+          # 而**不是** github.event.before。这个区别很关键：before..GITHUB_SHA 只覆盖本次 push，
+          # 一旦上一次运行失败（缓存没存下来）或两次 push 挨得很近，那一次改过的 deck 就既不在
+          # diff 里、缓存里又是旧 PDF，会被一直复用成旧版本 —— 线上 PDF 与 main 不一致且不会自愈。
+          # stamp 里还带 Typst 版本与 workflow 内容的哈希：编译环境变了就整体重编。
+          wf_rev="$(git hash-object .github/workflows/build-and-deploy.yml 2>/dev/null | cut -c1-12)"
+          stamp="$build_dir/.build-stamp"
+          stamp_sha=""; stamp_ver=""; stamp_wf=""
+          base_sha=""
+          if [ -f "$stamp" ]; then
+            read -r stamp_sha stamp_ver stamp_wf < "$stamp" || true
+            if [ "$stamp_ver" = "$TYPST_VERSION" ] && [ "$stamp_wf" = "$wf_rev" ]; then
+              base_sha="$stamp_sha"
+            else
+              echo "编译环境变了（Typst ${stamp_ver:-?} → ${TYPST_VERSION}，workflow ${stamp_wf:-?} → ${wf_rev}），改为全量编译"
+            fi
+          fi
+
           full_rebuild=1
           changed=""
           if [ "${GITHUB_EVENT_NAME:-}" = "push" ] \
              && [ "${GITHUB_REF:-}" = "refs/heads/main" ] \
-             && [ -n "${BEFORE_SHA:-}" ] \
-             && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ] \
-             && git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
+             && [ -n "$base_sha" ] \
+             && git cat-file -e "${base_sha}^{commit}" 2>/dev/null; then
             full_rebuild=0
-            changed="$(git diff --name-only "$BEFORE_SHA" "$GITHUB_SHA" -- slides || true)"
-            echo "增量编译：本次 push 改动了以下文件"
+            changed="$(git diff --name-only "$base_sha" "$GITHUB_SHA" -- slides || true)"
+            echo "增量编译：基准 ${base_sha:0:7} → ${GITHUB_SHA:0:7}，涉及以下文件"
             if [ -n "$changed" ]; then printf '%s\n' "$changed" | sed 's/^/  /'; else echo "  （slides/ 下没有改动）"; fi
           else
-            echo "全量编译：tag / release / 手动运行，或拿不到上一次提交"
+            echo "全量编译：非 main push，或缓存里没有上次成功的编译记录（首次 / 缓存被清理 / 上次编译失败）"
           fi
 
           # ---------- 2) 逐套幻灯片编译 ----------
@@ -199,6 +214,10 @@ jobs:
             exit 1
           fi
 
+          # 记下这次成功编译的状态，给下一次增量复用当基准（只有全部成功才会走到这里）。
+          # 它是 build/ 里的隐藏文件：patch 的缓存会带上它，而 artifact 与 Pages 都不会发布它。
+          printf '%s %s %s\n' "$GITHUB_SHA" "$TYPST_VERSION" "$wf_rev" > "$build_dir/.build-stamp"
+
           echo "编译完成：新编译 $rebuilt 套，复用 $reused 套"
           ls -lh "$build_dir"
 
@@ -215,13 +234,17 @@ jobs:
           count=0
 
           # 取 main.typ 里 config-info 的 title / subtitle（取不到就退回文件夹名）
-          # 先按「键单独占一行」匹配；不中再按单行写法匹配（要求键前面不是字母/下划线，
-          # 否则 subtitle: 里的 title: 会被误匹配成标题——实测踩过）
+          # 依次尝试：[..] 单独成行 → 单行里的 [..] → ".." 字符串写法。两处细节：
+          #   1) 跳过注释行，否则 // title: [旧标题] 会被当成真标题；
+          #   2) 单行写法要求键前面不是字母/下划线，否则 subtitle: 里的 title: 会被贪婪匹配成标题。
           pick() {
             local value
-            value="$(sed -nE "s/^[[:space:]]*$2:[[:space:]]*\[([^]]*)\].*/\1/p" "$1" | head -n 1)"
+            value="$(sed -nE "/^[[:space:]]*\/\//d; s/^[[:space:]]*$2:[[:space:]]*\[([^]]*)\].*/\1/p" "$1" | head -n 1)"
             if [ -z "$value" ]; then
-              value="$(sed -nE "s/.*[^[:alnum:]_]$2:[[:space:]]*\[([^]]*)\].*/\1/p" "$1" | head -n 1)"
+              value="$(sed -nE "/^[[:space:]]*\/\//d; s/.*[^[:alnum:]_]$2:[[:space:]]*\[([^]]*)\].*/\1/p" "$1" | head -n 1)"
+            fi
+            if [ -z "$value" ]; then
+              value="$(sed -nE "/^[[:space:]]*\/\//d; s/.*[^[:alnum:]_]$2:[[:space:]]*\"([^\"]*)\".*/\1/p" "$1" | head -n 1)"
             fi
             printf '%s' "$value"
           }
@@ -243,11 +266,8 @@ jobs:
             [ -n "$subtitle" ] || subtitle="点击卡片在线预览，或右键「另存为」下载"
 
             bytes="$(wc -c < "$pdf" | tr -d ' ')"
-            if [ "$bytes" -ge 1048576 ]; then
-              size="$(awk -v b="$bytes" 'BEGIN { printf "%.1f MB", b / 1048576 }')"
-            else
-              size="$(awk -v b="$bytes" 'BEGIN { printf "%.0f KB", b / 1024 }')"
-            fi
+            # 1 KB 以下显示 B；不到 1 MiB 的用 KB（封顶 1023，免得 1048575 被四舍五入成 "1024 KB"）
+            size="$(awk -v b="$bytes" 'BEGIN { if (b < 1024) { printf "%d B", b } else if (b < 1048576) { kb = b / 1024; if (kb > 1023) kb = 1023; printf "%.0f KB", kb } else { printf "%.1f MB", b / 1048576 } }')"
 
             title_html="$(printf '%s' "$title" | escape)"
             subtitle_html="$(printf '%s' "$subtitle" | escape)"
@@ -287,14 +307,14 @@ jobs:
           echo "已生成 $BUILD_DIR/index.html（$count 套幻灯片，$(wc -c < "$BUILD_DIR/index.html" | tr -d ' ') bytes）"
 
       # 给 release job 下载用的普通产物（下载后仍是 build/xxx.pdf，便于直接用通配符上传）
-      # 只在同一次运行内被用到，保留 1 天即可，避免堆积（Pages 那份也是 1 天）
+      # 只在同一次运行内被用到，保留 3 天：既不会堆积，隔天重跑失败的 job 也还拿得到
       - name: 上传 PDF 产物
         uses: actions/upload-artifact@v7
         with:
           name: slides-build
           path: ${{ env.BUILD_DIR }}
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 3
 
       # 给 deploy job 用的 Pages 站点产物（整份 build/ 目录，含 index.html）
       - name: 上传 Pages 站点产物
@@ -408,10 +428,12 @@ jobs:
         run: |
           set -euo pipefail
           site="https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}"
+          # tag 里可能有 () 之类的字符，放进 URL 前先转义，免得 Markdown 链接被截断
+          tag_url="$(printf '%s' "$TAG" | sed -e 's/(/%28/g' -e 's/)/%29/g')"
 
           {
             if [ "${MANAGED}" = "true" ]; then
-              echo "📅 **本 Release 按日期维护（\`${TAG}\`）**：同一天的多次 push 会刷新下面的 PDF；跨天后会自动新建一个日期版本。"
+              echo "📅 **本 Release 按日期维护（${TAG}）**：同一天的多次 push 会刷新下面的 PDF；跨天后会自动新建一个日期版本。"
               echo
             fi
             echo "包含以下幻灯片（左侧链接在线预览，右侧链接直接下载）："
@@ -419,7 +441,7 @@ jobs:
             for pdf in "$BUILD_DIR"/*.pdf; do
               [ -e "$pdf" ] || continue
               name="$(basename "$pdf")"
-              echo "- [\`${name}\`](${site}/${name}) · [下载](https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${name})"
+              echo "- [\`${name}\`](${site}/${name}) · [下载](https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag_url}/${name})"
             done
             echo
             echo "站点首页：<${site}/>"

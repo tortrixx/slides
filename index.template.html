@@ -37,7 +37,6 @@
         --background: 0 0% 100%;
         --foreground: 0 0% 3.9%;
         --secondary: 0 0% 94%;
-        --muted: 0 0% 96.1%;
         --muted-foreground: 0 0% 45.1%;
         --border: 0 0% 89.8%;
         --radius: 0.5rem;
@@ -48,7 +47,6 @@
         --background: 0 0% 3.9%;
         --foreground: 0 0% 98%;
         --secondary: 0 0% 14.9%;
-        --muted: 0 0% 14.9%;
         --muted-foreground: 0 0% 63.9%;
         --border: 0 0% 25.1%;
       }
@@ -122,7 +120,8 @@
       }
       .fade {
         animation: blur-fade 0.35s ease-out both;
-        animation-delay: calc(0.04s + var(--i, 0) * 0.1s);
+        /* 错峰上限 8 档：deck 很多时否则要等好几秒才全部出现 */
+        animation-delay: calc(0.04s + min(var(--i, 0), 8) * 0.1s);
       }
 
       /* ---------- 顶栏 ---------- */
@@ -155,6 +154,7 @@
         transform: rotate(180deg);
       }
       .tagline {
+        margin: 0;
         font-size: 1.25rem;
         font-weight: 500;
       }
@@ -221,7 +221,7 @@
         flex-direction: column;
         gap: 1.25rem;
       }
-      h3 {
+      h2 {
         display: flex;
         align-items: center;
         gap: 0.5rem;
@@ -233,6 +233,8 @@
         text-underline-offset: 4px;
       }
       .count {
+        /* inline-block 能挡住父级 text-decoration: underline 的传播 */
+        display: inline-block;
         padding: 0 0.5rem;
         border: 1px solid hsl(var(--border));
         border-radius: 9999px;
@@ -286,7 +288,8 @@
         transform: translateX(-1.5rem);
         transition: opacity 0.3s ease, transform 0.3s ease;
       }
-      .deck:hover .deck-title .ext {
+      .deck:hover .deck-title .ext,
+      .deck:focus-within .deck-title .ext {
         opacity: 1;
         transform: translateX(0);
       }
@@ -314,9 +317,6 @@
         border-radius: 9999px;
         line-height: 1.5;
       }
-      .file {
-        opacity: 0.8;
-      }
 
       /* ---------- hover 光边框（对应 magicui 的 BorderBeam） ---------- */
       @keyframes border-beam {
@@ -343,17 +343,15 @@
       .deck:hover .beam {
         opacity: 1;
       }
-      .beam::after {
-        content: "";
-        position: absolute;
-        aspect-ratio: 1 / 1;
-        width: 90px;
-        background: linear-gradient(to left, var(--accent-blue), var(--accent-yellow), transparent);
-      }
-      /* 光带依赖 offset-path: rect()；不支持它的浏览器如果硬跑，会在左上角糊一块渐变色，
-         所以整条光带只在支持时启用（纯装饰，不启用也不影响使用） */
+      /* 光带依赖 offset-path: rect()。不支持时若照常渲染，会在左上角糊一块渐变色，
+         所以整个伪元素都放进 @supports 里 —— 不支持就完全没有光带（纯装饰，不影响使用） */
       @supports (offset-path: rect(0 auto auto 0)) {
         .beam::after {
+          content: "";
+          position: absolute;
+          aspect-ratio: 1 / 1;
+          width: 90px;
+          background: linear-gradient(to left, var(--accent-blue), var(--accent-yellow), transparent);
           offset-path: rect(0 auto auto 0 round 90px);
           offset-anchor: 90% 50%;
           animation: border-beam 3s infinite linear;
@@ -427,10 +425,10 @@
           alt="tortrixx"
           onerror="this.remove()"
         />
-        <span class="tagline">Less noise, more signal.</span>
+        <h1 class="tagline">Less noise, more signal.</h1>
         <span class="spacer"></span>
         <div class="head-actions">
-          <button id="themeToggle" class="icon-btn" aria-label="切换深浅色">
+          <button id="themeToggle" class="icon-btn" aria-label="切换深浅色" aria-pressed="false">
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
               <path
                 class="icon-sun"
@@ -470,7 +468,7 @@
     <main>
       <!-- ================= 幻灯片 ================= -->
       <section class="fade" style="--i: 1">
-        <h3>Slides <span class="count"><!--COUNT--></span></h3>
+        <h2>Slides <span class="count"><!--COUNT--></span></h2>
         <!--SLIDES-->
       </section>
     </main>
@@ -487,8 +485,10 @@
       document.getElementById("themeToggle").addEventListener("click", function () {
         var root = document.documentElement;
         root.classList.toggle("dark");
+        var dark = root.classList.contains("dark");
+        this.setAttribute("aria-pressed", dark ? "true" : "false");
         try {
-          localStorage.setItem("theme", root.classList.contains("dark") ? "dark" : "light");
+          localStorage.setItem("theme", dark ? "dark" : "light");
         } catch (e) {}
       });
     </script>
