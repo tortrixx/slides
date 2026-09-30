@@ -117,8 +117,13 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
 - **导航页**：`index.template.html` 是首页模板（版式/样式都在里面），workflow 只负责
   注入数据，产物 `build/index.html` 是**服务端渲染**的静态页（无 JS 也能看）。
   三处占位注释由 `awk` 替换：`SLIDES`（卡片列表）、`COUNT`（套数）、`META`（更新时间+提交号）。
-  卡片的标题/副标题用 `sed` 从各 deck 的 `config-info(...)` 里取 `title:`/`subtitle:`，
-  取不到就退回文件夹名；文件大小由 `wc -c` 换算。
+  卡片数据来源：
+  - **标题/副标题**：`sed` 从各 deck 的 `config-info(...)` 里取 `title:` / `subtitle:`，
+    先按「键单独占一行」匹配，再按单行写法匹配（模式里要求键前面不是字母或下划线，
+    否则 `subtitle:` 里的 `title:` 会被贪婪匹配成标题——实测踩过）；
+    取不到时标题退回文件夹名、副标题退回一句默认文案。
+  - **链接与文件名**：`<文件夹名>.pdf`（与 `title` 无关），大小由 `wc -c` 换算。
+  - 标题按**原文**显示：Typst 标记（`*粗体*`、反引号）不会被渲染，也不会被剥离。
 - **首页视觉**：沿用 <https://github.com/tortrixx/tortrixx> 的设计语言（等宽字体、
   shadcn neutral 色阶、虚线网格背景、hover 光边框 BorderBeam、BlurFade 入场、
   localStorage 记忆深浅色）。改样式只动 `index.template.html`，不用碰 workflow。

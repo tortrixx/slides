@@ -202,8 +202,15 @@ jobs:
           count=0
 
           # 取 main.typ 里 config-info 的 title / subtitle（取不到就退回文件夹名）
+          # 先按「键单独占一行」匹配；不中再按单行写法匹配（要求键前面不是字母/下划线，
+          # 否则 subtitle: 里的 title: 会被误匹配成标题——实测踩过）
           pick() {
-            sed -nE "s/^[[:space:]]*$2:[[:space:]]*\[([^]]*)\].*/\1/p" "$1" | head -n 1
+            local value
+            value="$(sed -nE "s/^[[:space:]]*$2:[[:space:]]*\[([^]]*)\].*/\1/p" "$1" | head -n 1)"
+            if [ -z "$value" ]; then
+              value="$(sed -nE "s/.*[^[:alnum:]_]$2:[[:space:]]*\[([^]]*)\].*/\1/p" "$1" | head -n 1)"
+            fi
+            printf '%s' "$value"
           }
           escape() {
             sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
@@ -217,9 +224,6 @@ jobs:
             count=$((count + 1))
 
             title="$(pick "${dir}main.typ" title)"
-            if [ -z "$title" ]; then
-              title="$(sed -nE 's/.*title:[[:space:]]*\[([^]]*)\].*/\1/p' "${dir}main.typ" | head -n 1)"
-            fi
             [ -n "$title" ] || title="$name"
 
             subtitle="$(pick "${dir}main.typ" subtitle)"
