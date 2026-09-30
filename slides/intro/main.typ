@@ -43,6 +43,11 @@
 
 #show math.equation: set text(font: "New Computer Modern Math")
 
+// 中西文混排的视觉平衡：同样 20pt 时，汉字的墨迹高度约为 Inter 大写字母的 1.28 倍，
+// 看起来会「重」一圈。这里把汉字 / 假名 / 中文标点缩到 0.9em（20pt → 18pt），
+// 西文与公式保持 20pt。想更明显改成 0.85em，想更接近原样改成 0.95em。
+#show regex("[\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}\u{3000}-\u{303F}\u{FF00}-\u{FFEF}]"): set text(size: 0.9em)
+
 #set heading(numbering: numbly("{1}.", default: "1.1"))
 
 // ========== 封面 ==========
