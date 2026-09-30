@@ -161,9 +161,24 @@ typst watch main.typ          # 保存即自动重新编译
 | 手动 `git tag v2.0.0 && git push origin v2.0.0` | 用你指定的 `v2.0.0` 发版本，不再自动 +1 |
 | 在网页上编辑 / 发布 Release | 把最新的 PDF 补传到该 Release |
 
-> 工作流**不会**改动你写的 Release 说明（没有开启自动生成更新日志）：在网页上发布
-> Release 会同时产生一次 tag push，自动生成的说明可能被追加到你手写的内容后面。
-> 若确实想用自动更新日志，在 workflow 的 release 步骤里加 `generate_release_notes: true`。
+Release 标题就是版本号（例如 `v1.0.4`），附件是 `build/` 下的全部 PDF。
+
+**Release 说明是自动生成的**，只在**新建**版本时写入（已存在的 Release 绝不会被改动，
+所以你在网页上手写的说明不会被覆盖）。内容大致是：
+
+```markdown
+本次发布包含 build 下编译好的幻灯片，点击文件名可直接在线预览：
+
+- [`26-09-30.pdf`](https://tortrixx.github.io/slides/26-09-30.pdf)
+- [`example.pdf`](https://tortrixx.github.io/slides/example.pdf)
+- [`intro.pdf`](https://tortrixx.github.io/slides/intro.pdf)
+
+站点首页：<https://tortrixx.github.io/slides/>
+
+**完整变更**：https://github.com/tortrixx/slides/compare/v1.0.3...v1.0.4
+
+<sub>由 GitHub Actions 自动生成 · 提交 `ccfea2a`</sub>
+```
 
 ## 增量编译（只重编改动过的幻灯片）
 

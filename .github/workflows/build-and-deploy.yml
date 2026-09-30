@@ -306,6 +306,9 @@ jobs:
         run: |
           set -euo pipefail
 
+          tag=""
+          previous=""
+
           if [ "${GITHUB_EVENT_NAME}" = "release" ] && [ -n "${RELEASE_TAG}" ]; then
             tag="${RELEASE_TAG}"
             echo "使用 Release 自带的 tag：$tag"
@@ -318,6 +321,7 @@ jobs:
                       | sed 's|^refs/tags/||' \
                       | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
                       | sort -V | tail -n 1 || true)"
+            previous="${latest}"
             if [ -z "$latest" ]; then
               tag="v1.0.0"
             else
@@ -331,7 +335,21 @@ jobs:
             echo "自动版本号：${tag}（上一个版本：${latest:-无}）"
           fi
 
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          # 这个版本是否已经有 Release：
+          #   false → 是本次新建，可以写一份说明（列出版幻灯片）
+          #   true  → 已存在，只补附件，绝不动你手写的说明
+          if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            exists=true
+          else
+            exists=false
+          fi
+          echo "版本 ${tag} 的 Release 是否已存在：${exists}"
+
+          {
+            echo "tag=${tag}"
+            echo "previous=${previous}"
+            echo "exists=${exists}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: 下载编译产物
         uses: actions/download-artifact@v8
@@ -339,15 +357,54 @@ jobs:
           name: slides-build
           path: ${{ env.BUILD_DIR }}
 
-      - name: 创建 / 更新 Release 并上传 PDF
+      # 只在「新建 Release」时生成说明：列出本次包含的幻灯片 + 在线地址。
+      # 已存在的 Release 不生成，避免覆盖你手写的说明。
+      - name: 生成 Release 说明（仅新建时）
+        if: steps.version.outputs.exists == 'false'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          PREVIOUS: ${{ steps.version.outputs.previous }}
+        run: |
+          set -euo pipefail
+          site="https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}"
+
+          {
+            echo "本次发布包含 ${BUILD_DIR} 下编译好的幻灯片，点击文件名可直接在线预览："
+            echo
+            for pdf in "$BUILD_DIR"/*.pdf; do
+              [ -e "$pdf" ] || continue
+              name="$(basename "$pdf")"
+              echo "- [\`${name}\`](${site}/${name})"
+            done
+            echo
+            echo "站点首页：<${site}/>"
+            if [ -n "${PREVIOUS:-}" ]; then
+              echo
+              echo "**完整变更**：https://github.com/${GITHUB_REPOSITORY}/compare/${PREVIOUS}...${TAG}"
+            fi
+            echo
+            echo "<sub>由 GitHub Actions 自动生成 · 提交 \`${GITHUB_SHA:0:7}\`</sub>"
+          } > "$RUNNER_TEMP/release-notes.md"
+
+          cat "$RUNNER_TEMP/release-notes.md"
+
+      - name: 新建 Release 并上传 PDF
+        if: steps.version.outputs.exists == 'false'
         uses: softprops/action-gh-release@v3
         with:
           # tag 不存在时（main 自动发版本）会由本步骤自动创建
           tag_name: ${{ steps.version.outputs.tag }}
           # 自动创建 tag 时，指向本次构建的那个提交
           target_commitish: ${{ github.sha }}
+          body_path: ${{ runner.temp }}/release-notes.md
           files: ${{ env.BUILD_DIR }}/*.pdf
           fail_on_unmatched_files: true
-          # 这里故意不开 generate_release_notes：发布 Release 会伴随一次 tag push，
-          # 自动生成的说明会被追加到你手写的 Release 说明后面。
-          # 确实想要自动更新日志时，加一行 `generate_release_notes: true` 即可。
+
+      # 已经存在的 Release：只补/覆盖附件，完全不传 body，说明保持你写的内容
+      - name: 更新已有 Release 的附件
+        if: steps.version.outputs.exists == 'true'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          files: ${{ env.BUILD_DIR }}/*.pdf
+          fail_on_unmatched_files: true
