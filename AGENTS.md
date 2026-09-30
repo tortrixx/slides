@@ -86,6 +86,23 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
    （汉字、假名、emoji 都行）；禁止空格和其余 ASCII 符号。编译步骤会检查，违规直接
    `::error::` 并退出（否则会做出坏链接、坏 HTML、坏 Markdown）。改名等于换 URL，旧链接会 404。
 
+9. **非 Touying / A4 文档**：流水线不关心内容形态 —— A4 讲义、读书笔记、论文式文档都能和放映稿
+   共存。硬性要求只有三条：`slides/<名称>/main.typ` 存在、能用
+   `typst compile main.typ <out>.pdf` 编出 PDF、资源走相对路径。与放映稿的差异：
+   - **标题**：首页取的是 `title:` 那行。A4 用 Typst 原生的 `#set document(title: "…")`，
+     **必须是字符串**；写成 `title: [..]` 会 `error: expected string or array, found content`
+     直接编译失败（实测踩过，且会连带拦住整次部署）。不写则卡片退回文件夹名。
+   - **副标题**：`subtitle:` 属于 `config-info`，A4 文档没有 → 卡片使用默认文案。
+   - **字体**：A4 文档没有模板前言，需自己
+     `#set text(font: ((name: "Inter", covers: "latin-in-cjk"), "Noto Sans CJK SC"), size: 11pt, lang: "zh", region: "cn")`，
+     否则中文用回退字体（CI 里只保证这两个字体已安装）。
+   - `#show regex(...)` 那条 CJK 缩放**不是必需**，A4 想要中英视觉平衡也可照加；
+     字号走 11pt 左右（放映稿才是 20pt）。
+   - 增量编译、按日期发版、首页列表对它一视同仁。
+   实测：A4 竖版 MediaBox 595.28×841.89pt；1 页 / 2 页都正常列出；与 3 套 Touying deck 混排
+   全部编译通过，只改其中一份时也只重编那一份。README「用 A4 文档」一节里的示例是**逐字编译验证过**的，
+   改 README 时请顺手再编一次。
+
 ## 4. CI/CD（`.github/workflows/build-and-deploy.yml`）
 
 ### 触发条件

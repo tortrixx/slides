@@ -27,6 +27,42 @@ git add slides/my-talk && git commit -m "add my-talk" && git push
 > 文件夹名请只用**汉字 / 字母 / 数字 / 点 / 下划线 / 连字符**，不要空格和引号。
 > 它会直接变成 URL（`<文件夹名>.pdf`），带了别的字符 CI 会直接报错让你改名。
 
+不想写幻灯片、只想放普通 A4 讲义？同样放在 `slides/<名称>/` 下即可，见后面「用 A4 文档」一节。
+
+## 用 A4 文档（不套 Touying 模板）
+
+不写幻灯片也行：`slides/<名称>/main.typ` 只要能编译出 PDF，就会被编译、上线、自动更新。
+A4 讲义、读书笔记、论文式文档可以和 Touying 放映稿混在同一个仓库里。
+
+最小可用的 A4 模板：
+
+```typst
+#set document(title: "线性代数讲义")   // 字符串，不是 [...]，会显示成首页卡片标题
+#set page(paper: "a4", margin: (x: 2.2cm, y: 2cm), numbering: "1")
+#set text(
+  font: ((name: "Inter", covers: "latin-in-cjk"), "Noto Sans CJK SC"),
+  size: 11pt, lang: "zh", region: "cn",
+)
+#set heading(numbering: "1.")
+
+= 第一章 线性方程组
+
+正文……
+```
+
+三件要知道的事：
+
+1. **`title:` 必须写成字符串**。写成 `title: [线性代数讲义]` 会直接编译失败
+   （`expected string or array, found content`）。不写 `title:` 也能跑，只是卡片上显示文件夹名。
+2. **副标题没有对应字段**。`subtitle:` 是 Touying `config-info` 的字段，A4 文档没有，
+   卡片会退回到默认提示文案。
+3. **字体要自己设**。CI 里已经装好 Noto Sans CJK SC 和 Inter，但不写上面那段 `#set text(...)`，
+   中文会用回退字体。
+
+Touying 模板里那条中文缩放的 `#show regex(...)` 对 A4 文档**不是必需**的，
+想要中英视觉平衡也可以照加。其余自动化（增量编译、按日期发版、首页列表）一视同仁；
+唯一的共同约束是：任何一份文档编译失败都会拦住整次部署。
+
 ## 本地预览
 
 ```bash
