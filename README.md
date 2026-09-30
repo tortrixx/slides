@@ -15,6 +15,7 @@
 | 首页（自动生成的导航页） | <https://tortrixx.github.io/slides/> |
 | 单套幻灯片 | `https://tortrixx.github.io/slides/<文件夹名>.pdf` |
 | 例如 | <https://tortrixx.github.io/slides/intro.pdf> |
+| 固定下载地址（永远最新版） | `https://github.com/tortrixx/slides/releases/download/latest/<文件夹名>.pdf` |
 
 > 文件名就是 `slides/` 下的文件夹名。`slides/intro/` 编译出来就是 `.../slides/intro.pdf`。
 
