@@ -287,12 +287,14 @@ jobs:
           echo "已生成 $BUILD_DIR/index.html（$count 套幻灯片，$(wc -c < "$BUILD_DIR/index.html" | tr -d ' ') bytes）"
 
       # 给 release job 下载用的普通产物（下载后仍是 build/xxx.pdf，便于直接用通配符上传）
+      # 只在同一次运行内被用到，保留 1 天即可，避免堆积（Pages 那份也是 1 天）
       - name: 上传 PDF 产物
         uses: actions/upload-artifact@v7
         with:
           name: slides-build
           path: ${{ env.BUILD_DIR }}
           if-no-files-found: error
+          retention-days: 1
 
       # 给 deploy job 用的 Pages 站点产物（整份 build/ 目录，含 index.html）
       - name: 上传 Pages 站点产物

@@ -137,8 +137,9 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
   装饰性动效都做了降级：光带用 `@supports (offset-path: rect(...))` 包住（不支持就整条不显示，
   否则会在左上角糊一块渐变色），`prefers-reduced-motion: reduce` 时关闭淡入并隐藏光带，
   键盘焦点用 `:focus-visible` 描边。改 CSS 时请保留这些降级。
-- **产物**：`slides-build`（普通 artifact，给 release job 下载）+ `github-pages`
-  （`actions/upload-pages-artifact@v5`，给 deploy job）。`index.template.html` 在仓库根，
+- **产物**：`slides-build`（普通 artifact，给 release job 下载，`retention-days: 1`）+
+  `github-pages`（`actions/upload-pages-artifact@v5`，给 deploy job）。两份都只在同一次
+  运行内使用，所以保留期都压到最短，避免长期堆积。`index.template.html` 在仓库根，
   不会进站点（只上传 `build/`）。
 
 ### release 细节
