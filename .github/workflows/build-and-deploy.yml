@@ -50,7 +50,7 @@ jobs:
     name: 编译幻灯片
     runs-on: ubuntu-latest
     # 删除 tag / 分支同样会产生 push 事件（deleted: true）。必须忽略，
-    # 否则删掉 v1.0.0 之后工作流会认为「该版本不存在」而把它重新创建出来。
+    # 否则删掉 v2026.09.30 之后工作流会认为「该版本不存在」而把它重新创建出来。
     if: github.event.deleted != true
     steps:
       - name: 检出仓库
@@ -85,7 +85,7 @@ jobs:
           typst-version: ${{ env.TYPST_VERSION }}
           # 可选优化：把 cache-dependency-path 指向一个「只含 @preview import 行」的
           # .typ 文件即可缓存宏包（该输入只接受单个可编译的文件，不支持通配符）。
-          # 需要时见 README「进阶：缓存 @preview 宏包」一节。
+          # 需要时见 AGENTS.md 第 8 节「可能的后续改进」。
 
       # 增量编译的核心：把上一次的 build/ 目录取回来。
       # 没改动的幻灯片直接复用里面的 PDF，只重新编译改动过的那些。
@@ -136,6 +136,19 @@ jobs:
             [ -f "${dir}main.typ" ] || continue
             found=1
             name="$(basename "$dir")"
+
+            # 文件夹名会直接变成 URL 路径（<名称>.pdf）和首页链接，所以限制字符集：
+            # 允许汉字 / 字母 / 数字 / 点 / 下划线 / 连字符，其它 ASCII 字符（空格、引号、
+            # & # ? 等）会让链接或 Markdown 说明出问题，直接报错让人改名。
+            # 做法：删掉允许的 ASCII 与所有高位字节（UTF-8 汉字由高位字节组成），还剩东西就是非法字符。
+            unsafe="$(printf '%s' "$name" | LC_ALL=C tr -d 'A-Za-z0-9._-' | LC_ALL=C tr -d '\200-\377')"
+            if [ -n "$unsafe" ]; then
+              # 用 %q 把空格、引号之类的字符显示出来（否则报错里看不出是哪个字符）
+              echo "::error::文件夹名 ${name} 含不安全的字符（$(printf '%q' "$unsafe")），请只用汉字/字母/数字/点/下划线/连字符"
+              failed=1
+              continue
+            fi
+
             printf '%s\n' "$name" >> "$names_file"
 
             # 需要重新编译：全量编译、缓存里没有这份 PDF、或该目录这次有改动
@@ -213,7 +226,7 @@ jobs:
             printf '%s' "$value"
           }
           escape() {
-            sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+            sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'
           }
 
           for dir in slides/*/; do
@@ -238,13 +251,14 @@ jobs:
 
             title_html="$(printf '%s' "$title" | escape)"
             subtitle_html="$(printf '%s' "$subtitle" | escape)"
+            name_html="$(printf '%s' "$name" | escape)"
 
             # 卡片结构对应 index.template.html 里的 .deck 样式
             cat <<HTML >> "$items"
                   <div class="deck fade" style="--i: $count">
                     <span class="bar"></span>
                     <div class="deck-main">
-                      <a class="deck-title" href="${name}.pdf" target="_blank" rel="noreferrer">
+                      <a class="deck-title" href="${name_html}.pdf" target="_blank" rel="noreferrer">
                         ${title_html}
                         <svg class="ext" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6" /><path d="M10 14 21 3" /><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /></svg>
                       </a>
@@ -252,7 +266,7 @@ jobs:
                       <div class="deck-meta">
                         <span class="badge">PDF</span>
                         <span class="badge">${size}</span>
-                        <span class="file">${name}.pdf</span>
+                        <span class="file">${name_html}.pdf</span>
                       </div>
                     </div>
                     <span class="beam"></span>

@@ -17,6 +17,14 @@
       name="description"
       content="tortrixx 的幻灯片集合：用 Typst + Touying 编写，推送后自动编译为 PDF。"
     />
+    <!-- 分享到聊天/社交平台时显示的文字卡片（没有配图，所以用 summary 而不是大图卡片） -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Slides · tortrixx" />
+    <meta
+      property="og:description"
+      content="tortrixx 的幻灯片集合：用 Typst + Touying 编写，推送后自动编译为 PDF。"
+    />
+    <meta name="twitter:card" content="summary" />
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#FFF" />
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#09090B" />
     <link
@@ -340,10 +348,23 @@
         position: absolute;
         aspect-ratio: 1 / 1;
         width: 90px;
-        offset-path: rect(0 auto auto 0 round 90px);
-        offset-anchor: 90% 50%;
         background: linear-gradient(to left, var(--accent-blue), var(--accent-yellow), transparent);
-        animation: border-beam 3s infinite linear;
+      }
+      /* 光带依赖 offset-path: rect()；不支持它的浏览器如果硬跑，会在左上角糊一块渐变色，
+         所以整条光带只在支持时启用（纯装饰，不启用也不影响使用） */
+      @supports (offset-path: rect(0 auto auto 0)) {
+        .beam::after {
+          offset-path: rect(0 auto auto 0 round 90px);
+          offset-anchor: 90% 50%;
+          animation: border-beam 3s infinite linear;
+        }
+      }
+
+      /* ---------- 键盘焦点 ---------- */
+      :focus-visible {
+        outline: 2px solid hsl(var(--foreground));
+        outline-offset: 2px;
+        border-radius: 4px;
       }
 
       /* ---------- 页脚 ---------- */
@@ -367,6 +388,10 @@
           opacity: 1;
           transform: none;
           filter: none;
+        }
+        /* 关掉动画后光带会定格成一个色块，不如直接不显示 */
+        .beam {
+          display: none;
         }
       }
     </style>
@@ -452,7 +477,7 @@
 
     <footer class="fade" style="--i: 2">
       Built by
-      <a href="https://typst.app" target="_blank" rel="noreferrer">Typst</a> &
+      <a href="https://typst.app" target="_blank" rel="noreferrer">Typst</a> &amp;
       <a href="https://github.com/touying-typ/touying" target="_blank" rel="noreferrer">Touying</a>.
       本页由 GitHub Actions 自动生成 · <!--META-->
     </footer>

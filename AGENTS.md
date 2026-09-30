@@ -82,6 +82,9 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
 6. 主题切换：`themes.metropolis` → `themes.simple` / `themes.university` 等。
    注意 `themes.simple` 的封面必须写 `#title-slide[标题]`，metropolis 可以直接 `#title-slide()`。
 7. 包版本固定：touying 0.8.0（要求 Typst ≥ 0.15.0）、numbly 0.1.0、pinit 0.2.2。
+8. **文件夹名即 URL**：只允许 **汉字 / 字母 / 数字 / `.` / `_` / `-`**。编译步骤会检查，
+   出现空格、引号、`&`、`#`、`?` 等字符会直接 `::error::` 并退出（避免坏链接、坏 HTML、
+   坏 Markdown）。改名会改变 PDF 链接，等于换 URL，旧链接会 404。
 
 ## 4. CI/CD（`.github/workflows/build-and-deploy.yml`）
 
@@ -123,12 +126,17 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
     否则 `subtitle:` 里的 `title:` 会被贪婪匹配成标题——实测踩过）；
     取不到时标题退回文件夹名、副标题退回一句默认文案。
   - **链接与文件名**：`<文件夹名>.pdf`（与 `title` 无关），大小由 `wc -c` 换算。
+  - **转义**：文件夹名与标题/副标题都会做 HTML 转义（`&` `<` `>` `"`），
+    文件夹名另有字符集护栏（见 §3.8），两道一起保证生成的 HTML 不会被名字搞坏。
   - 标题按**原文**显示：Typst 标记（`*粗体*`、反引号）不会被渲染，也不会被剥离。
 - **首页视觉**：沿用 <https://github.com/tortrixx/tortrixx> 的设计语言（等宽字体、
   shadcn neutral 色阶、虚线网格背景、hover 光边框 BorderBeam、BlurFade 入场、
   localStorage 记忆深浅色）。改样式只动 `index.template.html`，不用碰 workflow。
   注意 `<meta charset>` 必须留在文件最前面——模板开头那段中文注释一旦挪到它前面，
   就会超出 1024 字节的编码探测窗口，页面会乱码。
+  装饰性动效都做了降级：光带用 `@supports (offset-path: rect(...))` 包住（不支持就整条不显示，
+  否则会在左上角糊一块渐变色），`prefers-reduced-motion: reduce` 时关闭淡入并隐藏光带，
+  键盘焦点用 `:focus-visible` 描边。改 CSS 时请保留这些降级。
 - **产物**：`slides-build`（普通 artifact，给 release job 下载）+ `github-pages`
   （`actions/upload-pages-artifact@v5`，给 deploy job）。`index.template.html` 在仓库根，
   不会进站点（只上传 `build/`）。
@@ -224,6 +232,13 @@ CI 逻辑全在 YAML 的 `run: |` 里，改完不能只靠肉眼。推荐流程�
 - GitHub 上「发布 Release」会**同时**产生 tag push 事件，可能让 workflow 跑两次；
   release job 的 concurrency group 会串行化它们。
 - 用 `GITHUB_TOKEN` 创建 tag 不会触发新的 workflow run，所以按日期发版不会自激。
+- **增量编译的判断只看 `slides/<名称>/` 是否在 diff 里**。所以改了「编译参数」（字体、
+  `--font-path`、Typst 版本）或仓库级公共文件时，没动过的 deck 会继续复用缓存里的旧 PDF。
+  这类改动之后，请到 **Actions → Caches** 删掉 `slides-build-main-*` 再跑一次，或随便
+  碰一下那些 deck（例如给 `main.typ` 加个空行）。
+- Release 说明里的站点链接是按「项目页」拼出来的（`<owner>.github.io/<repo>/`）。若以后
+  换成自定义域名，这段（以及首页里的相对链接之外的地方）需要同步改。
+- 首页的卡片标题是**纯文本**：deck 里 `title: [*粗体*]` 会原样显示星号，不会渲染成粗体。
 
 ## 8. 可能的后续改进
 

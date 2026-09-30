@@ -24,6 +24,9 @@ git add slides/my-talk && git commit -m "add my-talk" && git push
 约 1 分钟后即可在 `https://tortrixx.github.io/slides/my-talk.pdf` 和首页列表里看到。
 图片放在 `slides/my-talk/src/`，正文里用相对路径引用：`#image("src/figure.png")`。
 
+> 文件夹名请只用**汉字 / 字母 / 数字 / 点 / 下划线 / 连字符**，不要空格和引号。
+> 它会直接变成 URL（`<文件夹名>.pdf`），带了别的字符 CI 会直接报错让你改名。
+
 ## 本地预览
 
 ```bash
