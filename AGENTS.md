@@ -44,6 +44,8 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
 ├── .github/workflows/
 │   └── build-and-deploy.yml  # 全部自动化逻辑（唯一的 CI 文件）
 ├── index.template.html       # 站点首页模板（构建时注入幻灯片列表）
+├── verify-site.sh            # 本地校验：抽 workflow 脚本 + 语法/lint + 真跑六条编译路径
+├── verify-theme.js           # 本地校验：首页主题三态逻辑（17 条断言）
 ├── AGENTS.md                 # 本文件
 ├── README.md                 # 6 行：定位一句话 + 在线地址，不放任何清单/操作
 └── .gitignore                # 忽略 build/ 与本地编译出的 slides/*.main.pdf
@@ -331,6 +333,11 @@ typst compile --format png --pages 6 main.typ '/tmp/p-{p}.png'
 
 # 本地 Typst 版本应与 workflow 的 TYPST_VERSION 一致（当前 0.15.1）
 
+# 本地跑两道校验（改完 workflow / 首页后都要过一遍）
+bash verify-site.sh --build    # workflow：静态检查 + 六条编译路径（19 项）
+node verify-theme.js           # 首页：主题三态逻辑（17 项）
+node verify-theme.js build/index.html   # 也可以直接测构建产物
+
 # 查看线上状态
 gh run list --repo tortrixx/slides
 gh release list --repo tortrixx/slides
@@ -340,8 +347,10 @@ gh api repos/tortrixx/slides/releases --jq '.[].tag_name'
 **本地预览首页**（模板 + 生成步骤）：
 
 ```bash
+# 先按 §6 第 1 步把 workflow 脚本抽到 /tmp/wf-scripts，再跑「生成导航页」那一步：
 RUNNER_TEMP=/tmp/rt BUILD_DIR=build RELEASE_TZ=Asia/Shanghai \
-  bash /tmp/wf-scripts/build-5-*.sh
+  bash /tmp/wf-scripts/build-5.sh
+# 是 build-5.sh（生成导航页），不是 build-4.sh（编译 PDF）—— 编号对应见 §6 第 4 步。
 # 这一步已不需要 GITHUB_SHA（页脚不再显示提交号）。
 # 然后用无头 Chrome 截图看效果。两个坑：
 #   1) headless 默认 prefers-color-scheme: dark —— 想截浅色要显式 remove("dark")
@@ -354,15 +363,22 @@ RUNNER_TEMP=/tmp/rt BUILD_DIR=build RELEASE_TZ=Asia/Shanghai \
 
 ## 6. 改 workflow 后的验证清单（务必执行）
 
-CI 逻辑全在 YAML 的 `run: |` 里，改完不能只靠肉眼。**仓库根目录有
-`verify-site.sh` 把下面 1–4 步都做成了可执行的**，改完直接跑它：
+CI 逻辑全在 YAML 的 `run: |` 里，改完不能只靠肉眼。**仓库根目录有两个校验脚本**
+（一个管 workflow，一个管首页），改完直接跑：
 
 ```bash
 bash verify-site.sh            # 静态检查：抽脚本 + bash -n + 多字节 lint（几秒）
 bash verify-site.sh --build    # 再真跑六条编译路径（需要本地 typst，十几秒）
+node verify-theme.js           # 首页主题脚本的 17 条断言（改 index.template.html 后必跑）
 ```
 
-当前基线：`--build` 全绿 = 19 项通过。它覆盖的六条路径：
+**`verify-theme.js` 不是抄一份逻辑来测**：它把模板里那段内联 `<script>` 取出来，
+放进最小 DOM 桩里执行，所以测的就是页面上真正会跑的代码。它对回归确有拦截力
+（做过变异测试：把 `.icon-sun` 从基础隐藏规则里拿掉 → 17 项里挂 1 项；
+把 `apply()` 改回无条件用系统值 → 挂 5 项；回到 auto 时不清 localStorage → 挂 1 项）。
+首页那段代码历史上出过两个只有断言才能发现的 bug，别只靠肉眼和截图。
+
+`verify-site.sh --build` 当前基线是全绿 = 19 项通过。它覆盖的六条路径：
 ① 冷启动全量 ② 只改一个 deck 的增量 ③ 删除某套后清理残留 PDF
 ④ 某套编译失败必须 `exit 1` ⑤ 文件夹名非法必须 `exit 1` ⑥ 一套都没有必须 `exit 1`。
 
