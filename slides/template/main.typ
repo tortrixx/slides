@@ -48,23 +48,14 @@
 // 数学公式用 Typst 自带的 New Computer Modern Math
 #show math.equation: set text(font: "New Computer Modern Math")
 
-// 中西文混排的视觉平衡。汉字是满字框的方块字，Inter 的大写字母只占约 0.72em、
-// 小写 x-height 约 0.52em，所以汉字光看「块头」永远比西文大；但只缩字号会带来另一个
-// 毛病——汉字的底线比拉丁基线低约 1.4pt/20pt，中文会往下掉、显得发虚、和西文对不齐。
-// 实测（300dpi 量像素）：
-//
-//   方案                     汉字墨迹高   相对拉丁基线
-//   原样 1em                  18.5pt       +1.4pt
-//   1em + baseline -0.08em    18.5pt        0.0pt   ← 当前采用
-//   0.9em                     16.8pt       +1.4pt
-//
-// 所以这里不缩字号，而是把汉字整体上移 `baseline: -0.08em`，让汉字底线与拉丁基线齐平。
-// 想更「轻」一点可把 size 调到 0.95em（配套 baseline: -0.05em 同样齐平）；
-// 想彻底恢复原样，删掉 baseline 即可。
-//
-// 不要随手删掉这一行，正则里的 \u{3000}-\u{303F}、\u{FF00}-\u{FFEF} 必须保留，
-// 否则汉字缩小而「。、，：」不变，标点会显得特别大。
-#show regex("[\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}\u{3000}-\u{303F}\u{FF00}-\u{FFEF}]"): set text(size: 1em, baseline: -0.08em)
+// 中西文混排：不加任何 show 规则，汉字和西文都用 20pt、共用同一条基线。
+// 这是「默认」情形，也是目前选定的方案。历史上试过两种「平衡」写法，都不用了：
+//   * `set text(size: 0.9em)` —— 缩字号。汉字块头是小了，但墨迹底线比拉丁基线低约
+//     1.4pt/20pt，中文看着往下掉、和西文对不齐；
+//   * `set text(size: 1em, baseline: -0.08em)` —— 抬基线把底线拉平。量出来是齐的，
+//     但汉字会整体上浮，读起来仍别扭。
+// 结论：让 Typst 用字体自己的度量最稳。要调字号就改上面 `#set text` 里的 size
+// （会影响全篇），或者只在某一页用 `#slide[#set text(size: 18pt) ...]` 局部覆盖。
 
 // 标题编号：一级 "1."、二级 "1.1"
 #set heading(numbering: numbly("{1}.", default: "1.1"))
