@@ -13,3 +13,5 @@
    跨出去会报 `would escape the project root`。
 
 新建一套幻灯片时用 `cp -R slides/template slides/我的主题`，这个目录会一起复制过去。
+
+<!-- tortrixx/slides · 仓库约定见 AGENTS.md -->

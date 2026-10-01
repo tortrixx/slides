@@ -708,3 +708,5 @@ jobs:
           # 未加引号的 glob 由 shell 展开，每个文件一个参数，含空格的路径也安全。
           gh release upload "$TAG" "$BUILD_DIR"/*.pdf --clobber --repo "$GITHUB_REPOSITORY"
           echo "已更新 ${TAG} 的附件（${n} 个）；说明未改动"
+
+# tortrixx/slides · 仓库约定见 AGENTS.md

@@ -428,3 +428,5 @@ else bad "⑨ 非 main 分支 push 没走全量"; fi
 echo
 printf '结果：%d 通过 / %d 失败\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
+
+# tortrixx/slides · 仓库约定见 AGENTS.md

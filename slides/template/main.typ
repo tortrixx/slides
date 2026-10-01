@@ -276,3 +276,5 @@ cd slides/my-talk && typst watch main.typ
 
   有问题欢迎提问
 ]
+
+// tortrixx/slides · 仓库约定见 AGENTS.md

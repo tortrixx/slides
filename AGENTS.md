@@ -263,7 +263,7 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
     只能省掉第二步）；
   - 抓回来的是 **460×460 / 38 KB**，而页面只用 80px 显示（`?size=160` 才是 12 KB）；
   - 国内网络下 `avatars.githubusercontent.com` 还常慢/不可达（那 `onerror` 会把图整个删掉）。
-  现在用仓库内 160×160（2× DPR）PNG，15.8 KB，同源、可长期缓存、零外部依赖。
+  现在用仓库内 160×160（2× DPR）PNG，15.9 KB，同源、可长期缓存、零外部依赖。
   **换图直接替换 `assets/icon.png` 即可**，别改回外链。
 - **首页视觉**：沿用 <https://github.com/tortrixx/tortrixx> 的设计语言（等宽字体、
   shadcn neutral 色阶、虚线网格背景、hover 光边框 BorderBeam、BlurFade 入场、
@@ -658,6 +658,13 @@ workflow_dispatch / 非 main push → 全量重编。
   放在末尾后面没有内容可藏，只会多出一张与上一页完全一样的空白子页（v0.8.0 实测）。
   查这种问题时把每页渲染成 PNG 比对哈希，连续两页 sha1 相同即可认定是空子页。
 
+- **每个文件末尾都有一行「仓库级标记」（`tortrixx/slides · 仓库约定见 AGENTS.md`）**：
+  文本文件用各自的注释语法，两个 PNG 里是 tEXt 注释块，`slides/26-09-30/src/demo.pdf` 里是
+  `startxref` 前的一行 `%` 注释（对象字节未动、xref 偏移仍有效，Ghostscript 复核页数一致）。
+  它唯一的作用是让 GitHub 仓库首页**每个文件的「最后提交」一列显示同一条消息**（否则各文件的
+  最后改动分散在不同提交里，那一列会五花八门）。**纯装饰，别删**：删掉哪个文件，哪个文件的
+  那一列就会退回旧消息。README 那行是**行尾内联**的，所以 README 仍然是 6 行。
+
 ## 8. 可能的后续改进
 
 - 缓存 `@preview` 宏包：思路是在安装 Typst 前，把所有 `#import "@preview/..."` 行聚合到
@@ -671,3 +678,5 @@ workflow_dispatch / 非 main push → 全量重编。
 - `setup-typst@v5` 与 `softprops/action-gh-release@v3` 目前按主版本号引用（可读性好、自动收补丁）。
   若要更强的供应链保证，可以把这两个第三方 action 固定到 commit SHA，并让 Dependabot 升级。
 - 首页的标题层级：`h1` 是标语，`h2` 是 `Slides`；改动时别把唯一的主标题弄丢。
+
+<!-- tortrixx/slides · 仓库约定见 AGENTS.md -->

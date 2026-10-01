@@ -419,3 +419,5 @@ When building an agent, prefer:
 
   Questions?
 ]
+
+// tortrixx/slides · 仓库约定见 AGENTS.md
