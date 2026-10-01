@@ -208,8 +208,13 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
 
   ```css
   html { background: hsl(var(--background)); height: 100%; }
-  body { min-height: 100vh; background: hsl(var(--background)); }
+  body { min-height: 100vh; color: hsl(var(--foreground)); }  /* 注意：body 上不要再写 background */
   ```
+
+  **`body` 上不能再写 `background`**：`.bg-grid` 是 `z-index: -1`，它画在**根背景之上、
+  body 背景之下** —— body 一旦有不透明背景就把整片网格盖掉（这正是"背景修好了、网格
+  却没了"的原因：根背景原本是透明的，加了颜色后就挡住了网格）。
+  实测下半区灰度标准差：盖住时 0.46、去掉后 2.89（深色）/ 1.76（浅色）。
 
   同样要注意 `.bg-grid` 用 `position: fixed; inset: 0; height: 100%`，**百分比高度需要有
   参照**：只在 body 上写 `min-height: 100vh`、html 不给 `height` 时，Safari 里这层仍可能

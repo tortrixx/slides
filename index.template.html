@@ -96,10 +96,12 @@
         width: 90%;
         max-width: 48rem;
         padding: 1.25rem 0 2.5rem;
-        /* 背景在 html 上（铺满视口）；这里再垫一个 min-height，让 body 也占满视口高度，
-           这样 .bg-grid 那层绝对定位在 body 内也能拉满，不会在下方断掉。 */
+        /* 这里**不要**再设 background：根元素已经有背景、已经铺满视口，
+           而 .bg-grid 是 z-index:-1 —— 它画在根背景之上、但在 body 背景之下，
+           body 一旦有不透明背景就会把网格整片盖掉（实测：下半区灰度标准差 0.46 → 去掉后 2.89）。
+           min-height 仍然要留：让 body 占满视口高度，
+           .bg-grid 那层 position:fixed + height:100% 的百分比才有参照。 */
         min-height: 100vh;
-        background: hsl(var(--background));
         color: hsl(var(--foreground));
         font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
           "Roboto Mono", "Noto Sans Mono CJK SC", "Noto Sans Mono", monospace;
