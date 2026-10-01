@@ -337,7 +337,7 @@ typst compile --format png --pages 6 main.typ '/tmp/p-{p}.png'
 # 本地 Typst 版本应与 workflow 的 TYPST_VERSION 一致（当前 0.15.1）
 
 # 本地跑门禁（CI 里也是同一条命令；改完 workflow 务必先本地过一遍）
-bash verify-site.sh --build    # 静态检查 + 六条编译路径（19 项）
+bash verify-site.sh --build    # 静态检查 + 六条编译路径（20 项）
 bash verify-site.sh            # 只做静态部分，几秒（不真编译）
 
 # 查看线上状态
@@ -373,7 +373,7 @@ bash verify-site.sh            # 静态检查：抽脚本 + bash -n + 多字节 
 bash verify-site.sh --build    # 再六条编译路径，和 CI 门禁完全同一条命令
 ```
 
-当前基线：`--build` 全绿 = 19 项通过，覆盖六条路径：
+当前基线：`--build` 全绿 = 20 项通过，覆盖六条路径：
 ① 冷启动全量 ② 只改一个 deck 的增量 ③ 删除某套后清理残留 PDF
 ④ 某套编译失败必须 `exit 1` ⑤ 文件夹名非法必须 `exit 1` ⑥ 一套都没有必须 `exit 1`。
 
@@ -381,6 +381,17 @@ bash verify-site.sh --build    # 再六条编译路径，和 CI 门禁完全同�
 长期复用旧 PDF、护栏失效会做出坏链接、失败没 `exit 1` 会发布残缺站点。它们破了不报错，
 只是安静地出错，所以必须靠真跑一遍来守。反过来，`bash -n` 那类静态检查当门禁是**零增量**
 （语法错 GitHub 起不来 job、运行时也立刻炸），所以门禁的价值全在 `--build` 那部分。
+
+**门禁脚本自身的鲁棒性约定（`verify-site.sh`）**：
+- **不写死 workflow 的 `env:` 值**，改成从 YAML 读 `TYPST_VERSION` / `BUILD_DIR` / `RELEASE_TZ`。
+  写死过 `TYPST_VERSION`，后果实测很严重：workflow 一升级版本号，脚本造的 stamp 里的版本就和
+  真正会写的那份不一致 → 走进「编译环境变了 → 全量」分支 → ②③ 的增量断言全挂。
+  实测对比（把 workflow 的版本改成 9.9.9）：**写死版 2 通过 / 17 失败（exit 127）**，
+  读 env 版 **19 通过 / 0 失败**（当时还没加 env 断言，现在是 20 项）。这类假红比漏报更糟 —— 它会诱使人把测试改松。
+- **用 `trap 'rm -rf "$TMP"' EXIT INT TERM` 清理临时目录**：失败路径最容易留垃圾，
+  而留下的 `/tmp/slides-verify` 会在下次排查时被误读成"当前状态"（真踩过）。
+- 顺带：脚本里 `git commit` 用 `git -c user.email=… -c user.name=…`，不依赖 runner 上有
+  git 身份配置（那是环境相关的，不该假设）。
 
 **门禁的结构约束（别改坏）**：
 - 必须是**独立 job**。塞进 `build` 的步骤里有坑：`build` 最后会写 `.build-stamp`，
@@ -436,6 +447,14 @@ bash verify-site.sh --build    # 再六条编译路径，和 CI 门禁完全同�
 
 - `setup-typst` 的 `cache-dependency-path` **只接受单个可编译的 `.typ` 文件**，
   不支持通配符；cache miss 时它会 `typst compile` 这个文件来拉包。
+- **`actions/cache` 的 `if:` 是无效的**（实测）：官方文档写明「cache action 不支持 `if:`，
+  条件会被忽略」。本仓库 `恢复上次的编译产物` 那步挂着
+  `if: github.event_name == 'push' && github.ref == 'refs/heads/main'`，但查运行日志，
+  在 main push 上是真的执行了（`Cache restored from key: slides-build-main-<旧 run_id>`）——
+  行为上"碰巧对"，但**别指望这个条件真的拦住什么**。真要"只在 main 上恢复缓存"，
+  得把 cache 拆到独立 job 或用 `actions/cache/restore` + 显式条件。
+  好消息是增量逻辑本身不依赖这个条件：非 main push 一律全量编译（第 1 步的判断），
+  缓存里那份旧 build/ 只会被全量覆盖，不会造成陈旧复用。
 - `upload-artifact` 保存的是「路径公共祖先」下的相对结构；`download-artifact`
   用 `path: build` 还原后仍是 `build/*.pdf`，Release 的 `files` 通配符依赖这一点。
 - Jekyll 不参与（Pages 走 Actions 上传 artifact），无需 `.nojekyll`。

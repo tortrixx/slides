@@ -25,7 +25,25 @@ ok()  { printf '  ok   %s\n' "$1"; PASS=$((PASS+1)); }
 bad() { printf '  FAIL %s\n' "$1"; FAIL=$((FAIL+1)); }
 chk() { if [ "$2" = "$3" ]; then ok "$1（$3）"; else bad "$1：期望 [$3]，实际 [$2]"; fi; }
 
+# 无论从哪条路径退出都清掉临时目录 —— 校验脚本自己不该留垃圾（失败时最容易留）
+trap 'rm -rf "$TMP"' EXIT INT TERM
 rm -rf "$TMP"; mkdir -p "$TMP/scripts"
+
+# workflow env: 里的这两个值不写死：直接从 YAML 读，避免和 workflow 各说各话
+# （写死过一次 TYPST_VERSION，workflow 一升级就会让 stamp 比对失败、走进全量分支而**假红**）
+wf_env() {
+  ruby -ryaml -e 'v = YAML.load_file(ARGV[0])["env"] || {}; print(v[ARGV[1]].to_s)' "$WF" "$1"
+}
+TYPST_VERSION="$(wf_env TYPST_VERSION)"
+RELEASE_TZ="$(wf_env RELEASE_TZ)"
+BUILD_DIR="$(wf_env BUILD_DIR)"
+if [ -n "$TYPST_VERSION" ] && [ -n "$BUILD_DIR" ]; then
+  ok "从 workflow 读到 env：TYPST_VERSION=$TYPST_VERSION BUILD_DIR=$BUILD_DIR"
+else
+  bad "没读到 workflow 的 env（TYPST_VERSION/BUILD_DIR），脚本和工作流可能已脱节"
+  TYPST_VERSION="${TYPST_VERSION:-0.15.1}"; BUILD_DIR="${BUILD_DIR:-build}"
+fi
+RELEASE_TZ="${RELEASE_TZ:-Asia/Shanghai}"
 
 echo "── 1) 从 YAML 抽出 run: 脚本 ──"
 ruby -ryaml -e '
@@ -59,12 +77,12 @@ command -v typst >/dev/null || { bad "没找到 typst，跳过"; printf '%d 通�
 
 COMPILE="$TMP/scripts/build-4.sh"   # 「编译 slides/*/main.typ」这步
 INDEX="$TMP/scripts/build-5.sh"     # 「生成导航页」这步
-# workflow 里 env: 级别的变量，手工补上
-run_compile() { ( cd "$1" && RUNNER_TEMP="$2" BUILD_DIR=build TYPST_VERSION=0.15.1 \
-    RELEASE_TZ=Asia/Shanghai GITHUB_EVENT_NAME=push GITHUB_REF=refs/heads/main \
+# workflow 里 env: 级别的变量（上面已从 YAML 读出，不再写死）
+run_compile() { ( cd "$1" && RUNNER_TEMP="$2" BUILD_DIR="$BUILD_DIR" TYPST_VERSION="$TYPST_VERSION" \
+    RELEASE_TZ="$RELEASE_TZ" GITHUB_EVENT_NAME=push GITHUB_REF=refs/heads/main \
     GITHUB_SHA="${3:-$(git rev-parse HEAD 2>/dev/null || echo nosha)}" bash "$COMPILE" ); }
-run_index() { ( cd "$1" && RUNNER_TEMP="$2" BUILD_DIR=build TYPST_VERSION=0.15.1 \
-    RELEASE_TZ=Asia/Shanghai bash "$INDEX" ); }
+run_index() { ( cd "$1" && RUNNER_TEMP="$2" BUILD_DIR="$BUILD_DIR" TYPST_VERSION="$TYPST_VERSION" \
+    RELEASE_TZ="$RELEASE_TZ" bash "$INDEX" ); }
 fresh() { rm -rf "$1"; mkdir -p "$1" "$1/build"; cp -R ./. "$1"/; rm -rf "$1/build"; mkdir -p "$1/build"; }
 
 R="$TMP/repo"; T="$TMP/runner"; mkdir -p "$T"
@@ -77,8 +95,10 @@ run_index "$R" "$T" >/dev/null 2>&1
 chk "① 首页卡片数" "$(grep -c 'class="deck fade"' "$R/build/index.html")" 2
 
 # 增量：先把基准写成当前提交，再只改一个 deck
+# （版本与 workflow 哈希都必须和脚本真正会写的那份一致，否则会走进「环境变了→全量」分支，
+#   ② 就测不到增量路径了 —— 所以这里用上面从 YAML 读到的 TYPST_VERSION）
 sha0="$(cd "$R" && git rev-parse HEAD)"
-printf '%s %s %s\n' "$sha0" 0.15.1 "$(cd "$R" && git hash-object "$WF" | cut -c1-12)" > "$R/build/.build-stamp"
+printf '%s %s %s\n' "$sha0" "$TYPST_VERSION" "$(cd "$R" && git hash-object "$WF" | cut -c1-12)" > "$R/build/.build-stamp"
 printf '\n// 故意改动\n' >> "$R/slides/template/main.typ"
 (cd "$R" && git add -A && git -c user.email=v@x -c user.name=v commit -qm tmp) >/dev/null 2>&1
 out="$(run_compile "$R" "$T" "$(cd "$R" && git rev-parse HEAD)" 2>&1)"; rc=$?
