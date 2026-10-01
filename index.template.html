@@ -181,7 +181,6 @@
         align-items: center;
       }
       .icon-btn {
-        position: relative;
         margin-right: 0.25rem;
         padding: 5px;
         border: 0;
@@ -200,31 +199,28 @@
         height: 22px;
         width: 22px;
       }
-      /* 自动模式（data-mode="auto"）时在图标角落点一个小圆点：
-         三态循环里「自动」是唯一看不见的状态，用这个点表示「正在跟随系统」 */
-      .icon-btn[data-mode="auto"]::after {
-        content: "";
-        position: absolute;
-        right: 3px;
-        bottom: 3px;
-        width: 5px;
-        height: 5px;
-        border-radius: 9999px;
-        background: currentColor;
-        box-shadow: 0 0 0 1.5px hsl(var(--background));
-      }
-      /* 浅色下只亮太阳、深色下只亮月亮（图标只由 .dark 这个类驱动，
-         所以「自动跟随」和「手动固定」走的是同一套状态，只是手动时多一个 data-mode） */
-      .icon-sun {
-        fill: currentColor;
-      }
-      .dark .icon-sun {
-        fill: transparent;
-      }
+      /* 三种模式各配一个图标，只显示当前那个：
+         太阳 = 浅色、半明半暗的圆 = 自动跟随系统、月亮 = 深色。
+         （半明半暗是「自动/对比度」的经典符号，比在太阳/月亮角上加小点更干净，
+          三个图标分量也相当。）没有 data-mode 时（JS 被禁用）按默认显示太阳。 */
+      .icon-auto,
       .icon-moon {
-        fill: transparent;
+        display: none;
       }
-      .dark .icon-moon {
+      .icon-btn[data-mode="auto"] .icon-sun,
+      .icon-btn[data-mode="light"] .icon-moon,
+      .icon-btn[data-mode="dark"] .icon-auto {
+        display: none;
+      }
+      .icon-btn[data-mode="auto"] .icon-auto,
+      .icon-btn[data-mode="light"] .icon-sun,
+      .icon-btn[data-mode="dark"] .icon-moon {
+        display: block;
+      }
+      /* 太阳与月亮是实心字形；显示哪一个完全由上面的 data-mode 决定，
+         不再靠 fill 透明来「关灯」，所以 hover 变色（currentColor）能正常跟随。 */
+      .icon-sun,
+      .icon-moon {
         fill: currentColor;
       }
       .gh {
@@ -546,13 +542,23 @@
             aria-pressed="false"
           >
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+              <!-- 三个图标分别代表三种模式，只显示当前那个（见下方 CSS）：
+                   浅色=太阳、深色=月亮、自动=半明半暗的圆。
+                   自动用「半明半暗」这个经典符号，而不是在太阳/月亮角上加点，
+                   这样三个图标的分量才相当，看上去是一套。 -->
               <path
                 class="icon-sun"
+                fill="currentColor"
                 fill-rule="evenodd"
                 d="M12 17.5a5.5 5.5 0 1 0 0-11 5.5 5.5 0 0 0 0 11zm0 1.5a7 7 0 1 0 0-14 7 7 0 0 0 0 14zm12-7a.8.8 0 0 1-.8.8h-2.4a.8.8 0 0 1 0-1.6h2.4a.8.8 0 0 1 .8.8zM4 12a.8.8 0 0 1-.8.8H.8a.8.8 0 0 1 0-1.6h2.5a.8.8 0 0 1 .8.8zm16.5-8.5a.8.8 0 0 1 0 1l-1.8 1.8a.8.8 0 0 1-1-1l1.7-1.8a.8.8 0 0 1 1 0zM6.3 17.7a.8.8 0 0 1 0 1l-1.7 1.8a.8.8 0 1 1-1-1l1.7-1.8a.8.8 0 0 1 1 0zM12 0a.8.8 0 0 1 .8.8v2.5a.8.8 0 0 1-1.6 0V.8A.8.8 0 0 1 12 0zm0 20a.8.8 0 0 1 .8.8v2.4a.8.8 0 0 1-1.6 0v-2.4a.8.8 0 0 1 .8-.8zM3.5 3.5a.8.8 0 0 1 1 0l1.8 1.8a.8.8 0 1 1-1 1L3.5 4.6a.8.8 0 0 1 0-1zm14.2 14.2a.8.8 0 0 1 1 0l1.8 1.7a.8.8 0 0 1-1 1l-1.8-1.7a.8.8 0 0 1 0-1z"
               />
+              <g class="icon-auto">
+                <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2" />
+                <path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" stroke="none" />
+              </g>
               <path
                 class="icon-moon"
+                fill="currentColor"
                 fill-rule="evenodd"
                 d="M16.5 6A10.5 10.5 0 0 1 4.7 16.4 8.5 8.5 0 1 0 16.4 4.7l.1 1.3zm-1.7-2a9 9 0 0 1 .2 2 9 9 0 0 1-11 8.8 9.4 9.4 0 0 1-.8-.3c-.4 0-.8.3-.7.7a10 10 0 0 0 .3.8 10 10 0 0 0 9.2 6 10 10 0 0 0 4-19.2 9.7 9.7 0 0 0-.9-.3c-.3-.1-.7.3-.6.7a9 9 0 0 1 .3.8z"
               />
