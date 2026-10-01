@@ -27,10 +27,10 @@
 
 #show math.equation: set text(font: "New Computer Modern Math")
 
-// 中西文混排的视觉平衡：同样 20pt 时汉字墨迹约为 Inter 大写字母的 1.28 倍，中文会显得「胖一圈」。
-// 这里把汉字 / 假名 / 中文标点缩到 0.9em（20pt → 18pt），西文与公式保持 20pt。
-// 想更明显改成 0.85em，想更接近原样改成 0.95em；删掉这一行即恢复原状。
-#show regex("[\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}\u{3000}-\u{303F}\u{FF00}-\u{FFEF}]"): set text(size: 0.9em)
+// 中西文混排的视觉平衡：汉字是满字框的方块字，只缩字号会让它的底线比拉丁基线低约
+// 1.4pt/20pt，中文看着往下掉、和西文对不齐。所以这里不缩字号，改成把汉字整体上移
+// `baseline: -0.08em`，让汉字底线与拉丁基线齐平。细节与实测数据见 slides/template。
+#show regex("[\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}\u{3000}-\u{303F}\u{FF00}-\u{FFEF}]"): set text(size: 1em, baseline: -0.08em)
 
 #set heading(numbering: numbly("{1}.", default: "1.1"))
 

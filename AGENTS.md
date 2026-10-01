@@ -73,16 +73,25 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
    )
    #show math.equation: set text(font: "New Computer Modern Math")
 
-   // 中西文混排的视觉平衡：汉字/假名/中文标点缩到 0.9em，西文与公式保持 20pt
-   #show regex("[\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}\u{3000}-\u{303F}\u{FF00}-\u{FFEF}]"): set text(size: 0.9em)
+   // 中西文混排的视觉平衡：不缩字号，把汉字整体上移，让汉字底线与拉丁基线齐平
+   #show regex("[\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}\u{3000}-\u{303F}\u{FF00}-\u{FFEF}]"): set text(size: 1em, baseline: -0.08em)
 
    #set heading(numbering: numbly("{1}.", default: "1.1"))
    ```
 
-4. **不要随手删掉那条 `#show regex(...)`**。同样 20pt 时汉字墨迹高约是 Inter 大写字母的
-   1.28 倍，看起来「胖一圈」；缩到 0.9em 后降到约 1.17。实测单页要点容量 14 → 16 条，
-   公式与西文不受影响。调档只改一个数：`0.85em` 更明显、`0.95em` 接近原样。
-   正则里的 `\u{3000}-\u{303F}`、`\u{FF00}-\u{FFEF}` 必须保留，否则汉字缩小而
+4. **不要随手删掉那条 `#show regex(...)`**。做法经历过一次修正，别再照老文档写「缩到 0.9em」：
+   - 最早的写法是 `set text(size: 0.9em)`（缩字号）。它解决了「汉字块头大」，但带了新毛病：
+     汉字墨迹的**底线比拉丁基线低约 1.4pt/20pt**，中文看着往下掉、和西文对不齐，
+     混排时（尤其汉字挨着数字、大写字母）会明显觉得中文「偏小、不齐」。
+   - 现在改成 `set text(size: 1em, baseline: -0.08em)`：字号不动，靠抬基线让两者底线齐平。
+   - 300dpi 实测（20pt、拉丁基线为 0）：`1em` 时汉字墨迹 18.5pt、底线 +1.4pt；
+     `1em + baseline -0.08em` 时 18.5pt、底线 **0.0pt**；`0.9em` 时 16.6pt、底线 +1.4pt。
+   - 也可以两者折中：`size: 0.95em, baseline: -0.05em`（同样齐平、看上去更轻）。
+     想彻底恢复原样就删掉 `baseline`。`baseline` 的 em 按**父级**字号算，所以 20pt 下
+     `-0.08em` = 抬高 1.6pt。
+   - 换字号会少量影响换行（实测 26-09-30 那套 49 页，改前改后每页文本行块数**完全一致**，
+     模板 20 页也不变），但仍建议改完扫一眼最密的那几页。
+   - 正则里的 `\u{3000}-\u{303F}`、`\u{FF00}-\u{FFEF}` 必须保留，否则汉字被处理而
    「。、，：」不变，标点会显得特别大。
 5. 字号：正文 20pt 是 metropolis 的默认值，`#set text` 里显式写出来只为可读性。
    内容特别密的单页用局部覆盖（`#slide[#set text(size: 18pt) ...]`），不要全局改小。
@@ -109,8 +118,8 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
    - **字体**：A4 文档没有模板前言，需自己
      `#set text(font: ((name: "Inter", covers: "latin-in-cjk"), "Noto Sans CJK SC"), size: 11pt, lang: "zh", region: "cn")`，
      否则中文用回退字体（CI 里只保证这两个字体已安装）。
-   - `#show regex(...)` 那条 CJK 缩放**不是必需**，A4 想要中英视觉平衡也可照加；
-     字号走 11pt 左右（放映稿才是 20pt）。
+   - `#show regex(...)` 那条中西文齐平（`size: 1em, baseline: -0.08em`，见 §3.4）**不是必需**，
+     但 A4 想要中英视觉平衡也照加；字号走 11pt 左右（放映稿才是 20pt）。
    - 增量编译、按日期发版、首页列表对它一视同仁。
    最小可用模板（已逐字编译验证，产出 595.28×841.89pt 的 A4）：
    `#set document(title: "…")` + `#set page(paper: "a4", margin: (x: 2.2cm, y: 2cm), numbering: "1")`
