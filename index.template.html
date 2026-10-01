@@ -33,6 +33,9 @@
     <meta name="twitter:card" content="summary" />
     <!-- 地址栏/滚动条等浏览器自带界面跟随系统偏好；用户手动切过之后则由下方的 JS 改写 -->
     <meta name="color-scheme" content="light dark" />
+    <!-- 这两条按系统偏好给浏览器 UI 上色（无 JS 时的兜底）；
+         有 JS 时上方脚本会摘掉 media 并改写 content，让它跟"实际生效的主题"一致，
+         否则手动固定浅/深之后地址栏颜色会和页面对不上 -->
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#FFF" />
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#09090B" />
     <link
@@ -66,8 +69,20 @@
         border-color: hsl(var(--border));
       }
 
+      /* 背景必须设在根元素上：html 铺满整个视口，所以页面比内容高时下面也是对的颜色。
+         曾经只把 background 设在 body 上 —— Chrome 会把 body 背景提升成画布背景，
+         但 Safari 不会（body 只有 width:90%、不是全宽矩形），于是内容高度以下露出一条
+         浅色，深色模式下特别明显（用户截图报过）。 */
       html {
         color-scheme: light;
+        /* 背景设在根元素：html 铺满整个视口，页面比内容高时下面也是对的颜色。
+           曾经只把 background 设在 body 上 —— Chrome 会把 body 背景提升成画布背景，
+           但 Safari 不会（body 只有 width:90%、不是全宽矩形），于是内容高度以下露出一条
+           浅色，深色模式下特别明显（用户截图报过）。 */
+        background: hsl(var(--background));
+        /* 给 body 一个百分比高度的参照，视口高度链才完整
+           （只在 body 上写 min-height:100vh 时，Safari 里固定定位那层仍可能只覆盖内容高度） */
+        height: 100%;
       }
       html.dark {
         color-scheme: dark;
@@ -81,6 +96,9 @@
         width: 90%;
         max-width: 48rem;
         padding: 1.25rem 0 2.5rem;
+        /* 背景在 html 上（铺满视口）；这里再垫一个 min-height，让 body 也占满视口高度，
+           这样 .bg-grid 那层绝对定位在 body 内也能拉满，不会在下方断掉。 */
+        min-height: 100vh;
         background: hsl(var(--background));
         color: hsl(var(--foreground));
         font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
@@ -451,6 +469,14 @@
           root.classList.toggle("dark", dark);
           // 同时告诉浏览器本页当前配色，表单控件/滚动条才不会反色
           root.style.colorScheme = dark ? "dark" : "light";
+          // 地址栏/工具栏那圈颜色也跟着走（meta 的 media 只认系统偏好，手动固定后会不一致）
+          var colors = document.querySelectorAll('meta[name="theme-color"]');
+          if (colors.length) {
+            colors.forEach(function (meta) {
+              meta.removeAttribute("media");
+              meta.setAttribute("content", dark ? "#09090B" : "#FFF");
+            });
+          }
         }
         // 按钮的无障碍状态要手动对齐：首屏这次在 DOM 就绪后补，之后每次系统切换时同步
         function syncButton(button) {

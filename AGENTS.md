@@ -201,6 +201,34 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
   装饰性动效都做了降级：光带用 `@supports (offset-path: rect(...))` 包住（不支持就整条不显示，
   否则会在左上角糊一块渐变色），`prefers-reduced-motion: reduce` 时关闭淡入并隐藏光带，
   键盘焦点用 `:focus-visible` 描边。改 CSS 时请保留这些降级。
+- **页面背景要设在 `html` 上，不能只设在 `body`**（Safari 踩过）：`body` 是
+  `width: 90%` 的居中盒子、只有内容那么高，把 `background` 只写在它上面时，浏览器**可能**
+  把 body 背景提升为画布背景（Chrome 会），Safari 不会 —— 结果内容高度以下露出一条浅色，
+  深色模式下特别明显（用户截图报过）。现在是这样，三条一起保证铺满：
+
+  ```css
+  html { background: hsl(var(--background)); height: 100%; }
+  body { min-height: 100vh; background: hsl(var(--background)); }
+  ```
+
+  同样要注意 `.bg-grid` 用 `position: fixed; inset: 0; height: 100%`，**百分比高度需要有
+  参照**：只在 body 上写 `min-height: 100vh`、html 不给 `height` 时，Safari 里这层仍可能
+  只覆盖内容高度（`html` 没有确定高度，body 的百分比高度就悬空）。
+  判定方法（Chrome 也能做，因为量的是几何而不是颜色）：
+
+  ```js
+  // 旧写法会暴露：html 高只有内容高、背景透明，全靠浏览器提升 body 背景
+  document.documentElement.getBoundingClientRect().height   // 应等于 innerHeight
+  getComputedStyle(document.documentElement).backgroundColor // 不应是 rgba(0,0,0,0)
+  ```
+
+  实测对比：旧写法 视口 857 / html 289 / 根背景 transparent；新写法 857 / 857 / rgb(10,10,10)。
+  另外 Safari 的 WebDriver（`safaridriver`）需要手动在 Safari 设置里开「允许远程自动化」，
+  开不了就只能靠 Chrome 量几何 + 让用户在 Safari 里目视确认。
+- **`prefers-color-scheme` 只在"跟随系统"时等于实际主题**：手动固定浅/深后，所有
+  `<meta name="theme-color" media="(prefers-color-scheme: ...)">` 都会和页面对不上，
+  所以 JS 应用主题时会 `removeAttribute("media")` 并改写 `content`，让地址栏那圈颜色跟着
+  **实际生效的主题**走。
 - **首页主题策略（三态循环，不是两态）**：`auto` / `light` / `dark`，右上角按钮依次循环。
   - `auto`（默认，也是 localStorage 没存 `theme` 时的状态）：**每次加载都重新读**浏览器的
     `prefers-color-scheme`，并在 `matchMedia` 的 `change` 事件里实时跟随。所以「首次打开按浏览器、
