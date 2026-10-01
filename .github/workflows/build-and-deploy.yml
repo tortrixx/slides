@@ -28,7 +28,10 @@ on:
   workflow_dispatch: # 支持在 Actions 页面手动运行（只构建/部署，不发版本）
 
 env:
-  # Typst 版本。锁版本可保证构建可复现；想始终用最新稳定版可改成 latest
+  # Typst 版本。锁版本可保证构建可复现。
+  # 注意**别写成 latest**：stamp 里存的是这个字符串、靠它做「编译环境变了就全量」的判断，
+  # latest == latest 永远成立，上游升级就不会触发全量，未改动的 deck 会一直复用旧版编出的 PDF。
+  # 想升级就改成具体版本号（改完这一处，哈希与版本都变，会自动全量重编一次）。
   TYPST_VERSION: "0.15.1"
   # 编译产物目录（Pages 站点根目录）
   BUILD_DIR: build
@@ -51,7 +54,8 @@ jobs:
   # 门禁失败」这个顺序成立，stamp 已经落盘，下次 push 会以为编译过了而跳过重编 ——
   # 门禁反而制造了它本该防的那种不一致。独立 job 从结构上避免。
   #
-  # 为什么放在最前面：只需要 checkout + Typst，比 build 少了装字体，失败得更快；
+  # 为什么放在最前面：它要真编译含中文的 deck，所以也得装同一套字体（否则环境差异会假红），
+  # 但比 build 少了恢复缓存、生成导航页、上传产物这些步骤，失败得更快；
   # build 用 needs 依赖它，红了就整体不部署。
   # ---------------------------------------------------------------------------
   verify:
@@ -63,6 +67,9 @@ jobs:
     steps:
       - name: 检出仓库
         uses: actions/checkout@v7
+        with:
+          # 门禁脚本不需要推送、也不用 git 凭据，别把 token 留在 .git/config 里
+          persist-credentials: false
 
       - name: 安装模板字体（Noto Sans CJK SC / Inter）
         run: |
@@ -91,6 +98,8 @@ jobs:
     # 删除 tag / 分支同样会产生 push 事件（deleted: true）。必须忽略，
     # 否则删掉 v2026.09.30 之后工作流会认为「该版本不存在」而把它重新创建出来。
     if: github.event.deleted != true
+    # 上限：装字体 + 全量编译（最坏情况：缓存没了 + deck 变多）。不设上限时卡住的 job 会占满默认 6 小时
+    timeout-minutes: 20
     steps:
       - name: 检出仓库
         uses: actions/checkout@v7
@@ -101,6 +110,8 @@ jobs:
           ref: ${{ github.event.release.tag_name || github.ref }}
           # 增量编译要对比「上一次提交」，所以需要完整历史（仓库很小，代价可忽略）
           fetch-depth: 0
+          # 编译步骤只用本地 git 命令（hash-object / diff / cat-file），不需要凭据
+          persist-credentials: false
 
       # 模板里指定的字体（见 slides/*/main.typ 的 #set text）：
       #   Noto Sans CJK SC → 中文；Inter → 西文；New Computer Modern Math 由 Typst 自带。
@@ -171,9 +182,20 @@ jobs:
              && [ -n "$base_sha" ] \
              && git cat-file -e "${base_sha}^{commit}" 2>/dev/null; then
             full_rebuild=0
-            changed="$(git diff --name-only "$base_sha" "$GITHUB_SHA" -- slides || true)"
-            echo "增量编译：基准 ${base_sha:0:7} → ${GITHUB_SHA:0:7}，涉及以下文件"
-            if [ -n "$changed" ]; then printf '%s\n' "$changed" | sed 's/^/  /'; else echo "  （slides/ 下没有改动）"; fi
+            # core.quotePath=false 是**必须**的：文件夹名允许汉字/假名/emoji（§3.8），
+            # 而 git 默认把非 ASCII 路径转义成带引号的 "\346\226\207..." 八进制形式，
+            # 下面 grep -F "slides/中文/" 就永远匹配不上 → 该 deck 被当成「没有改动」而
+            # 复用旧 PDF，stamp 却照写新提交 → 静默发布旧内容且永不自愈（已实测复现）。
+            if ! changed="$(git -c core.quotePath=false diff --name-only "$base_sha" "$GITHUB_SHA" -- slides)"; then
+              # diff 失败（例如基准对象不在本地）**不能**当成「没有改动」——那同样会
+              # 复用整套旧 PDF，所以退回全量编译（fail safe）。
+              echo "::warning::git diff 失败，无法确定改动范围，改为全量编译"
+              full_rebuild=1
+              changed=""
+            else
+              echo "增量编译：基准 ${base_sha:0:7} → ${GITHUB_SHA:0:7}，涉及以下文件"
+              if [ -n "$changed" ]; then printf '%s\n' "$changed" | sed 's/^/  /'; else echo "  （slides/ 下没有改动）"; fi
+            fi
           else
             echo "全量编译：非 main push，或缓存里没有上次成功的编译记录（首次 / 缓存被清理 / 上次编译失败）"
           fi
@@ -267,6 +289,26 @@ jobs:
           template="index.template.html"
           [ -f "$template" ] || { echo "::error::缺少首页模板 ${template}"; exit 1; }
 
+          # ---------- 0) 站点静态资源 ----------
+          # 头像等资源放在仓库的 assets/ 里，构建时拷进站点根目录（Pages 只发布 build/）。
+          # 故意做成 fail closed：文件不在时页面不会报错，只是那张图被 onerror 静默删掉，
+          # 属于最难发现的坏法 —— 宁可整次构建失败。
+          #
+          # 先清掉 build/ 里「非 PDF、非 index.html」的旧文件：build/ 是 actions/cache 的缓存
+          # 对象，只清 *.pdf 的话，某个版本拷进来、后来不再拷的静态资源会**永久**被缓存带下去，
+          # 并随两份 artifact 一起发布到站点根目录（自愈不了）。点号开头的 .build-stamp 不匹配
+          # "$BUILD_DIR"/*，会被保留 —— 它是下次增量编译的基准。
+          for stale in "$BUILD_DIR"/*; do
+            [ -e "$stale" ] || continue
+            case "$(basename "$stale")" in
+              *.pdf | index.html) ;;
+              *) echo "🧹 删除 build/ 里已不再生成的旧文件：$(basename "$stale")"; rm -rf "$stale" ;;
+            esac
+          done
+
+          [ -f assets/icon.png ] || { echo "::error::缺少站点资源 assets/icon.png"; exit 1; }
+          cp assets/icon.png "$BUILD_DIR/icon.png"
+
           # ---------- 1) 为每套幻灯片生成一张卡片 ----------
           items="$RUNNER_TEMP/slides-items.html"
           : > "$items"
@@ -314,7 +356,9 @@ jobs:
             # 取 /Count 的最大值而不是第一个，避免个别 struct tree 的计数排在前面；
             # 再限定 1–4 位数字，免得二进制里凑巧出现的字节被当成计数。
             # 万一以后 PDF 被压缩、这里读不到，会渲染成空胶囊（不至于显示错的页数）。
-            pages="$(strings "$pdf" | grep -o '/Count [0-9]\{1,4\}' | awk '{print $2}' | sort -n | tail -1)"
+            # 注意末尾的 `|| true`：grep 无匹配时退出 1，在本步的 set -euo pipefail 下
+            # 会**直接终止整个步骤**（那就不是「空胶囊」而是整次部署被跳过），所以必须吞掉。
+            pages="$(strings "$pdf" | grep -o '/Count [0-9]\{1,4\}' | awk '{print $2}' | sort -n | tail -1)" || true
             pages_html="<span class=\"badge\">${pages} 页</span>"
 
             title_html="$(printf '%s' "$title" | escape)"
@@ -336,9 +380,9 @@ jobs:
                   <div class="deck fade" style="--i: $count">
                     <span class="bar"></span>
                     <div class="deck-main">
-                      <a class="deck-title" href="${name_html}.pdf" target="_blank" rel="noreferrer">
+                      <a class="deck-title" href="${name_html}.pdf" target="_blank" rel="noopener noreferrer">
                         ${title_html}
-                        <svg class="ext" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6" /><path d="M10 14 21 3" /><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /></svg>
+                        <svg class="ext" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6" /><path d="M10 14 21 3" /><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /></svg>
                       </a>
                       ${desc_html}
                       <div class="deck-meta">
@@ -390,6 +434,8 @@ jobs:
     needs: build
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
+    # 上限：部署本身很快，卡住通常是 Pages 侧问题，别让它占满默认 6 小时
+    timeout-minutes: 10
     # 同一时间只允许一个 Pages 部署，避免并发部署互相覆盖；不打断已在进行的部署
     concurrency:
       group: pages
@@ -417,6 +463,8 @@ jobs:
       || (github.event_name == 'push' && github.ref == 'refs/heads/main')
       || (github.event_name == 'push' && github.ref_type == 'tag'))
     runs-on: ubuntu-latest
+    # 上限：只是 gh + 上传附件，超时说明 GitHub API 侧卡住了
+    timeout-minutes: 10
     # 发布 Release 时 GitHub 会同时产生 tag push 事件，可能让本工作流跑两次并操作
     # 同一个 Release；用同一个 concurrency group 把两次运行串行化，避免并发冲突。
     concurrency:
@@ -457,10 +505,16 @@ jobs:
           # 该 Release 是否已存在：
           #   false → 本次新建，可以写一份自动说明
           #   true  → 已存在；当天再次 push 时刷新说明，其它版本化 Release 只补附件
-          if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+          # 「不存在」和「查不到」必须分开判断：把 403 限流 / 5xx / 网络错误当成「不存在」，
+          # 会让一个已存在的版本化 Release 走「新建」分支并带上自动说明 —— 覆盖掉用户手写的说明。
+          # 所以只有明确报 not found / 404 才判 false，其它错误一律 fail closed。
+          if view_out="$(gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" 2>&1)"; then
             exists=true
-          else
+          elif printf '%s' "$view_out" | grep -qiE 'not found|HTTP 404'; then
             exists=false
+          else
+            echo "::error::无法确认 Release ${tag} 是否存在（gh 报错：${view_out}）。宁可失败也不覆盖可能存在的说明。"
+            exit 1
           fi
           echo "Release ${tag} 是否已存在：${exists}"
 
@@ -486,8 +540,10 @@ jobs:
         run: |
           set -euo pipefail
           site="https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}"
-          # tag 里可能有 () 之类的字符，放进 URL 前先转义，免得 Markdown 链接被截断
-          tag_url="$(printf '%s' "$TAG" | sed -e 's/(/%28/g' -e 's/)/%29/g')"
+          # tag 里可能出现 git ref 允许的任何字符（( ) 空格 # % & 等），放进 URL 路径必须整体
+          # 转义，否则 Markdown 链接会被截断或指向别处。用 python3 按 RFC 3986 做百分号编码
+          # （ubuntu-latest 自带 python3，verify-site.sh 也依赖它）。
+          tag_url="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$TAG")"
 
           {
             if [ "${MANAGED}" = "true" ]; then

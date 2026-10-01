@@ -87,6 +87,9 @@
          color-scheme（优先级更高）把它改成实际主题 */
 
       body {
+        /* 竖直方向用 flex 撑满视口：main 吃掉剩余高度，页脚就落在「页面最下方」（见 main / footer） */
+        display: flex;
+        flex-direction: column;
         position: relative;
         margin: 0 auto;
         width: 90%;
@@ -256,6 +259,9 @@
 
       /* ---------- 区块 ---------- */
       main {
+        /* 1 0 auto：内容少时把剩余高度全部吃掉，页脚因此贴到页面底部；
+           内容多时按内容自然增长，页脚仍旧跟在卡片之后（不会盖住内容） */
+        flex: 1 0 auto;
         display: flex;
         flex-direction: column;
         gap: 1.25rem;
@@ -418,8 +424,12 @@
       }
 
       /* ---------- 页脚 ---------- */
+      /* 位置：页面最下方、整行居中。原来它紧跟在最后一张卡片下面，
+         只有一两套幻灯片时看着像"浮在中间"；现在由 body 的 flex 布局 + main 的
+         flex:1 把它压到底部。这里只留一个最小间距（内容很长时不会贴住卡片）。 */
       footer {
         margin-top: 1.25rem;
+        text-align: center;
         font-size: 0.75rem;
         color: hsl(var(--muted-foreground));
       }
@@ -549,10 +559,16 @@
 
     <header class="fade" style="--i: 0">
       <div class="head-row">
+        <!-- 头像走仓库内静态资源 assets/icon.png（构建时拷进站点根目录），不用
+             https://github.com/tortrixx.png 那种外链：那是全页唯一的跨站请求，还会
+             302 到 avatars.githubusercontent.com（多一次 DNS+TLS，实测 1.8s 才拿到图，
+             而且 302 带 cache-control: no-cache，每次打开都要重走一遍）。 -->
         <img
           class="avatar"
-          src="https://github.com/tortrixx.png"
+          src="icon.png"
           alt="tortrixx"
+          width="80"
+          height="80"
           onerror="this.remove()"
         />
         <h1 class="tagline">Less noise, more signal.</h1>
@@ -567,7 +583,8 @@
             aria-label="主题：自动，跟随系统 · 点击切换到浅色"
             aria-pressed="false"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+            <!-- 图标是纯装饰（可访问名由按钮的 aria-label 提供），对读屏软件隐藏 -->
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true">
               <!-- 三个图标分别代表三种模式，只显示当前那个（见下方 CSS）：
                    浅色=太阳、深色=月亮、自动=半明半暗的圆。
                    自动用「半明半暗」这个经典符号，而不是在太阳/月亮角上加点，
@@ -590,13 +607,14 @@
               />
             </svg>
           </button>
-          <a class="gh" href="https://github.com/tortrixx/slides" target="_blank" rel="noreferrer"
+          <a class="gh" href="https://github.com/tortrixx/slides" target="_blank" rel="noopener noreferrer"
             aria-label="GitHub 仓库" title="GitHub 仓库">
             <svg
               xmlns="http://www.w3.org/2000/svg"
               width="20"
               height="20"
               viewBox="0 0 24 24"
+              aria-hidden="true"
               fill="none"
               stroke="currentColor"
               stroke-width="1.8"

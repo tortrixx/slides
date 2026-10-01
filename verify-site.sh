@@ -77,6 +77,17 @@ command -v typst >/dev/null || { bad "没找到 typst，跳过"; printf '%d 通�
 
 COMPILE="$TMP/scripts/build-4.sh"   # 「编译 slides/*/main.typ」这步
 INDEX="$TMP/scripts/build-5.sh"     # 「生成导航页」这步
+# 这两个编号是按 steps 下标抽出来的，workflow 里插入/删除任何一步都会错位。
+# 错位最坏的后果不是报错，而是**静默测错步骤**（比如拿生成导航页的脚本去验护栏，永远通过），
+# 所以先按内容签名确认它们确实是那两步，不对就立刻停。
+if ! grep -q 'typst compile' "$COMPILE" 2>/dev/null; then
+  bad "抽取到的 build-4.sh 不是「编译」步骤（workflow 步骤顺序变了），请按内容重新定位"
+  printf '%d 通过 / %d 失败\n' "$PASS" "$FAIL"; exit 1
+fi
+if ! grep -q '<!--SLIDES-->' "$INDEX" 2>/dev/null; then
+  bad "抽取到的 build-5.sh 不是「生成导航页」步骤（workflow 步骤顺序变了），请按内容重新定位"
+  printf '%d 通过 / %d 失败\n' "$PASS" "$FAIL"; exit 1
+fi
 # workflow 里 env: 级别的变量（上面已从 YAML 读出，不再写死）
 run_compile() { ( cd "$1" && RUNNER_TEMP="$2" BUILD_DIR="$BUILD_DIR" TYPST_VERSION="$TYPST_VERSION" \
     RELEASE_TZ="$RELEASE_TZ" GITHUB_EVENT_NAME=push GITHUB_REF=refs/heads/main \
@@ -87,12 +98,19 @@ fresh() { rm -rf "$1"; mkdir -p "$1" "$1/build"; cp -R ./. "$1"/; rm -rf "$1/bui
 
 R="$TMP/repo"; T="$TMP/runner"; mkdir -p "$T"
 fresh "$R"
+# 期望套数**从夹具推导**，不写死：仓库加一套幻灯片（§1 承诺的「cp -R slides/template … 后
+# push 即可」）不该让门禁假红 —— 假红比漏报更糟，它会诱使人把断言改松（§6 已警告过）。
+n_decks=0
+for d in "$R"/slides/*/; do [ -f "${d}main.typ" ] && n_decks=$((n_decks + 1)); done
 out="$(run_compile "$R" "$T" 2>&1)"; rc=$?
 chk "① 冷启动全量：exit" "$rc" 0
-chk "① 产出 PDF 数" "$(ls "$R"/build/*.pdf 2>/dev/null | wc -l | tr -d ' ')" 2
+chk "① 产出 PDF 数" "$(ls "$R"/build/*.pdf 2>/dev/null | wc -l | tr -d ' ')" "$n_decks"
 chk "① 写了 .build-stamp" "$([ -f "$R/build/.build-stamp" ] && echo yes || echo no)" yes
 run_index "$R" "$T" >/dev/null 2>&1
-chk "① 首页卡片数" "$(grep -c 'class="deck fade"' "$R/build/index.html")" 2
+chk "① 首页卡片数" "$(grep -c 'class="deck fade"' "$R/build/index.html")" "$n_decks"
+# 头像等站点资源是「生成导航页」那步从 assets/ 拷进 build/ 的：漏拷不会报错，
+# 只是 img 被 onerror 静默删掉，所以这里钉一下产物里确实有它
+chk "① 站点资源 icon.png 已进 build/" "$([ -f "$R/build/icon.png" ] && echo yes || echo no)" yes
 
 # 增量：先把基准写成当前提交，再只改一个 deck
 # （版本与 workflow 哈希都必须和脚本真正会写的那份一致，否则会走进「环境变了→全量」分支，
@@ -104,8 +122,23 @@ printf '\n// 故意改动\n' >> "$R/slides/template/main.typ"
 out="$(run_compile "$R" "$T" "$(cd "$R" && git rev-parse HEAD)" 2>&1)"; rc=$?
 chk "② 增量：exit" "$rc" 0
 if grep -q '增量编译' <<<"$out"; then ok "② 走了增量"; else bad "② 没走增量"; fi
-chk "② 复用的套数" "$(grep -c '没有改动，复用' <<<"$out")" 1
+chk "② 复用的套数" "$(grep -c '没有改动，复用' <<<"$out")" "$((n_decks - 1))"
 chk "② 重编的套数" "$(grep -c '✅' <<<"$out")" 1
+
+# ②b 非 ASCII 文件夹名（§3.8 允许汉字名）的增量。
+# git diff 默认 core.quotePath=true，会把 slides/中文甲/main.typ 输出成带引号 + 八进制转义的
+# 形式，编译步骤里的 `grep -F "slides/中文甲/"` 于是永远匹配不上 → 该 deck 被当成「没有改动」
+# 而复用旧 PDF，stamp 却照写新提交 → 静默发布旧内容且永不自愈。这条断言钉住 quotePath=false。
+mkdir -p "$R/slides/中文甲"
+cp -R "$R/slides/template/." "$R/slides/中文甲/"
+(cd "$R" && git add -A && git -c user.email=v@x -c user.name=v commit -qm tmp-cjk) >/dev/null 2>&1
+run_compile "$R" "$T" "$(cd "$R" && git rev-parse HEAD)" >/dev/null 2>&1   # 先编出来，并作为新基准
+printf '\n// 故意改动\n' >> "$R/slides/中文甲/main.typ"
+(cd "$R" && git add -A && git -c user.email=v@x -c user.name=v commit -qm tmp-cjk2) >/dev/null 2>&1
+out="$(run_compile "$R" "$T" "$(cd "$R" && git rev-parse HEAD)" 2>&1)"; rc=$?
+chk "②b 中文目录名：exit" "$rc" 0
+if grep -q '✅ 中文甲' <<<"$out"; then ok "②b 中文目录名的改动被重编（core.quotePath 已关）"
+else bad "②b 中文目录名的改动被当成「没改动」而复用了旧 PDF（core.quotePath 没关？）"; fi
 
 rm -rf "$R/slides/template"
 out="$(run_compile "$R" "$T" 2>&1)"; rc=$?

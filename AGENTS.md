@@ -44,6 +44,8 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
 ├── .github/workflows/
 │   └── build-and-deploy.yml  # 全部自动化逻辑（唯一的 CI 文件）
 ├── index.template.html       # 站点首页模板（构建时注入幻灯片列表）
+├── assets/
+│   └── icon.png              # 站点静态资源（左上角头像），构建时拷进 build/
 ├── verify-site.sh            # CI 门禁脚本：抽 workflow 脚本 + 语法/lint + 真跑六条编译路径
 ├── AGENTS.md                 # 本文件
 ├── README.md                 # 6 行：定位一句话 + 在线地址，不放任何清单/操作
@@ -157,6 +159,12 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
 `deploy` 用固定的 `pages` concurrency group；`release` 用 `release-<tag>`（main push 时即
 `release-main`）串行化，避免同一天两个 push 并发改同一个 Release。
 
+四个 job 都显式写了 `timeout-minutes`（verify 10 / build 20 / deploy 10 / release 10）：
+不写的话默认上限是 **6 小时**，卡住的 job 会一直占着 runner，`deploy`/`release` 还会一直占着
+自己的 concurrency 名额，把后续运行排队卡死。另外两个 `checkout` 都带
+`persist-credentials: false` —— 没有任何步骤需要推送，不留 token 在 `.git/config` 里
+（编译步骤用的 `git hash-object / diff / cat-file` 全是本地操作，不需要凭据）。
+
 ### build 细节
 
 - **字体**：`apt-get install fonts-noto-cjk fonts-inter`（取不到时降级为只装 CJK）。
@@ -174,6 +182,10 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
   而编译失败时不会写 stamp，所以失败的下一次 push 必然把那些 deck 重新编译一遍。
   另两个字段用来在**编译环境变化**（Typst 版本、workflow 里的字体/编译参数）时强制全量。
   stamp 是 `build/` 里的隐藏文件：只进 patch 缓存，不进 artifact、不进 Pages。
+  这一条核对过 action 源码（2026-10）：`upload-pages-artifact@v5` 的 `include-hidden-files`
+  默认 `false`，打包时会加 `--exclude=.[^/]*`；`upload-artifact@v7` 同样默认不收隐藏文件。
+  所以 `.build-stamp` 不会出现在站点上，也不会进 Release 附件（release 那边另有
+  `files: build/*.pdf` 兜底）。**别把它改成非隐藏文件名**，否则会被发布出去。
   tag / release / 手动运行一律全量编译。
 - **导航页**：`index.template.html` 是首页模板（版式/样式都在里面），workflow 只负责
   注入数据，产物 `build/index.html` 是**服务端渲染**的静态页（无 JS 也能看）。
@@ -205,6 +217,23 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
   - **转义**：文件夹名与标题/副标题都会做 HTML 转义（`&` `<` `>` `"`），
     文件夹名另有字符集护栏（见 §3.8），两道一起保证生成的 HTML 不会被名字搞坏。
   - 标题按**原文**显示：Typst 标记（`*粗体*`、反引号）不会被渲染，也不会被剥离。
+- **站点静态资源（`assets/`）**：Pages 只发布 `build/`，所以仓库里的静态文件由「生成导航页」
+  那步开头拷进站点根目录（现在只有 `assets/icon.png`，即左上角头像；模板里写 `src="icon.png"`）。
+  文件缺失是 `::error::` + 退出，**故意 fail closed**：页面不会因此报错，只是 `img` 被
+  `onerror` 静默删掉，不失败的话很难发现。`verify-site.sh` 里钉了一条产物断言。
+  拷之前先清掉 `build/` 里「非 `*.pdf`、非 `index.html`」的旧文件（点号开头的 `.build-stamp`
+  不匹配 `"$BUILD_DIR"/*`，会保留）：`build/` 是 `actions/cache` 的缓存对象，只清 PDF 的话，
+  某个版本拷进来、后来不再拷的静态资源会被缓存**永久**带下去，并随两份 artifact 一起发布到
+  站点根目录，自愈不了（本地 `build/` 里就躺过 `avatar-*.png` 这种中间态残留）。
+  头像原来写的是 `https://github.com/tortrixx.png`，为什么换掉（2026-10 实测）：
+  - 那是**全页唯一的跨站请求**（其余 CSS/JS/图标全是内联的），所以必然最后出现；
+  - 它会 **302** 到 `avatars.githubusercontent.com`，多一次 DNS + TLS，实测 1.84s 才拿到图；
+    而且这个 302 带 `cache-control: no-cache`，**每次打开都要重走一遍**（图的 `max-age=300`
+    只能省掉第二步）；
+  - 抓回来的是 **460×460 / 38 KB**，而页面只用 80px 显示（`?size=160` 才是 12 KB）；
+  - 国内网络下 `avatars.githubusercontent.com` 还常慢/不可达（那 `onerror` 会把图整个删掉）。
+  现在用仓库内 160×160（2× DPR）PNG，15.8 KB，同源、可长期缓存、零外部依赖。
+  **换图直接替换 `assets/icon.png` 即可**，别改回外链。
 - **首页视觉**：沿用 <https://github.com/tortrixx/tortrixx> 的设计语言（等宽字体、
   shadcn neutral 色阶、虚线网格背景、hover 光边框 BorderBeam、BlurFade 入场、
   深浅色主题）。改样式只动 `index.template.html`，不用碰 workflow。
@@ -213,8 +242,23 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
   装饰性动效都做了降级：光带用 `@supports (offset-path: rect(...))` 包住（不支持就整条不显示，
   否则会在左上角糊一块渐变色），`prefers-reduced-motion: reduce` 时关闭淡入并隐藏光带，
   键盘焦点用 `:focus-visible` 描边。改 CSS 时请保留这些降级。
+  无障碍上另有两条硬约定（2026-10 补齐）：
+  - **装饰性 SVG 一律 `aria-hidden="true"`**：背景网格（`.bg-grid`）、主题按钮里的三个图标、
+    GitHub 图标、卡片上的「外链」小箭头。它们的可访问名由外层承担（按钮/链接的 `aria-label`、
+    卡片标题的可见文本），SVG 自己不提供名字，留着只会让读屏软件多念一句「图形」。
+    注意卡片里那个箭头 SVG 是**在 workflow 的 heredoc 里**生成的（改它要动 YAML）。
+  - 头像 `img` 显式写 `width="80" height="80"`（与 CSS 一致）：样式表万一没生效也不会撑破布局。
+  另外 `target="_blank"` 的链接都带 `rel="noopener noreferrer"`（`noreferrer` 本身就蕴含
+  `noopener`，写全是为了不依赖这条蕴含关系；Lighthouse 的「跨源跳转安全」审计认这两者之一）。
+- **页脚位置**：`body` 是 `display: flex; flex-direction: column`（已有 `min-height: 100vh`），
+  `main` 吃剩余高度（`flex: 1 0 auto`），`footer` 只留 `margin-top: 1.25rem` + `text-align: center`
+  —— 内容少时页脚落在**页面最下方、整行居中**，内容超过一屏时仍旧跟在最后一张卡片之后
+  （不用 `position: fixed`，那会盖住内容）。原来它紧跟在卡片下面，只有一两套幻灯片时看着像"浮在中间"。
+  实测（无头 Chrome，视口高 1000、两套幻灯片）：footer 底边距视口底 40px（= body 的
+  `padding-bottom: 2.5rem`）、中心 x=550 与 body 中心重合；16 张卡片的页面：文档高 1646、
+  页脚距最后一张卡片 20px，无重叠。
 - **页面背景要设在 `html` 上，不能只设在 `body`**（Safari 踩过）：`body` 是
-  `width: 90%` 的居中盒子、只有内容那么高，把 `background` 只写在它上面时，浏览器**可能**
+  `width: 90%` 的居中盒子、高度只由内容与 `min-height: 100vh` 决定，把 `background` 只写在它上面时，浏览器**可能**
   把 body 背景提升为画布背景（Chrome 会），Safari 不会 —— 结果内容高度以下露出一条浅色，
   深色模式下特别明显（用户截图报过）。现在是这样，三条一起保证铺满：
 
@@ -301,7 +345,15 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
 - `managed=true` 表示这是工作流按天维护的 Release → **每次都刷新说明与附件**；
   `managed=false`（手动 tag / release 事件）→ 只在 `exists=false` 时写说明，
   已存在时**只覆盖附件、绝不传 body**，以免覆盖用户手写的说明。
-- `exists` 用 `gh release view <tag>` 探测。
+- `exists` 用 `gh release view <tag>` 探测，但**只有明确报 `not found` / `HTTP 404` 才判 false**：
+  403 限流 / 5xx / 网络错误一律 `::error::` 退出。把「查不到」当成「不存在」，会让一个已存在的
+  版本化 Release 走「新建」分支并带上自动说明 —— 直接覆盖掉用户手写的说明。
+- Release 说明里的 tag 片段用 `python3 -c 'urllib.parse.quote(...)'` 整体做百分号编码：
+  手写 tag 里可能出现 `(` `)` `#` `%` 等字符，只转义括号会让 Markdown 链接被截断。
+- **已知行为（不是 bug，但改前要想清楚）**：`overwrite_files: true` 只覆盖**同名**附件、不做
+  prune —— 同一天里删掉或改名某套 deck 后再 push，旧 PDF 仍留在当天 Release 上，
+  `releases/latest/download/<旧名>.pdf` 会继续返回旧内容，直到跨天新建 Release 才换掉链接。
+  想清理就得显式删附件，但那会连手动附加的文件一起误删，所以这里选择只记录不自动做。
 - 发布用 `softprops/action-gh-release@v3` + `overwrite_files: true`（同一天重复 push 靠它覆盖）。
 - **tag 一旦创建就不再移动**：同一天的附件会更新，但 tag 停在当天第一次 push 的提交。
   移动已存在的 tag 会让所有克隆的 `git fetch --tags` 报 `would clobber existing tag`。
@@ -337,7 +389,7 @@ typst compile --format png --pages 6 main.typ '/tmp/p-{p}.png'
 # 本地 Typst 版本应与 workflow 的 TYPST_VERSION 一致（当前 0.15.1）
 
 # 本地跑门禁（CI 里也是同一条命令；改完 workflow 务必先本地过一遍）
-bash verify-site.sh --build    # 静态检查 + 六条编译路径（20 项）
+bash verify-site.sh --build    # 静态检查 + 六条编译路径（23 项）
 bash verify-site.sh            # 只做静态部分，几秒（不真编译）
 
 # 查看线上状态
@@ -373,9 +425,11 @@ bash verify-site.sh            # 静态检查：抽脚本 + bash -n + 多字节 
 bash verify-site.sh --build    # 再六条编译路径，和 CI 门禁完全同一条命令
 ```
 
-当前基线：`--build` 全绿 = 20 项通过，覆盖六条路径：
-① 冷启动全量 ② 只改一个 deck 的增量 ③ 删除某套后清理残留 PDF
-④ 某套编译失败必须 `exit 1` ⑤ 文件夹名非法必须 `exit 1` ⑥ 一套都没有必须 `exit 1`。
+当前基线：`--build` 全绿 = 23 项通过，覆盖六条路径：
+① 冷启动全量（含 `assets/icon.png` 确实进了 `build/`）② 只改一个 deck 的增量
+②b **非 ASCII 文件夹名**的增量必须重编那一套（钉住 `core.quotePath=false`，见 §7）
+③ 删除某套后清理残留 PDF ④ 某套编译失败必须 `exit 1` ⑤ 文件夹名非法必须 `exit 1`
+⑥ 一套都没有必须 `exit 1`。
 
 **为什么这个门禁值得存在**：这六条守的都是**静默失效**的不变量 —— stamp 基准错了会
 长期复用旧 PDF、护栏失效会做出坏链接、失败没 `exit 1` 会发布残缺站点。它们破了不报错，
@@ -387,9 +441,20 @@ bash verify-site.sh --build    # 再六条编译路径，和 CI 门禁完全同�
   写死过 `TYPST_VERSION`，后果实测很严重：workflow 一升级版本号，脚本造的 stamp 里的版本就和
   真正会写的那份不一致 → 走进「编译环境变了 → 全量」分支 → ②③ 的增量断言全挂。
   实测对比（把 workflow 的版本改成 9.9.9）：**写死版 2 通过 / 17 失败（exit 127）**，
-  读 env 版 **19 通过 / 0 失败**（当时还没加 env 断言，现在是 20 项）。这类假红比漏报更糟 —— 它会诱使人把测试改松。
+  读 env 版 **19 通过 / 0 失败**（当时还没加 env 断言，现在是 23 项）。这类假红比漏报更糟 —— 它会诱使人把测试改松。
 - **用 `trap 'rm -rf "$TMP"' EXIT INT TERM` 清理临时目录**：失败路径最容易留垃圾，
   而留下的 `/tmp/slides-verify` 会在下次排查时被误读成"当前状态"（真踩过）。
+- **期望套数从夹具推导，不写死**：`n_decks` 由 `$R/slides/*/main.typ` 数出来，①③ 的数量断言
+  和 ② 的复用套数都用它。写死过 `2`／`1`，而 §1 承诺「`cp -R slides/template slides/my-talk`
+  后 push 即可」—— 加第三套 slide 的那次 push 会让门禁假红，进而 `needs: verify` 把部署和发版
+  全卡死（正是 §6 警告的「假红诱使人把测试改松」）。
+- **抽出来的步骤脚本按内容签名校验，不认死编号**：`build-4.sh` / `build-5.sh` 是按 steps 下标
+  抽的，workflow 插一步就错位，而错位最坏的结果是**静默测错步骤**（拿生成导航页的脚本验护栏会
+  永远通过）。所以先确认前者含 `typst compile`、后者含 `<!--SLIDES-->`，不对就立刻 exit 1。
+- **另有一条只在 CI 存在的差异（已知，未修）**：CI 的 `run:` 由 runner 以带 `-e` 的 shell 启动，
+  而门禁用 `bash <脚本>`（不继承 `-e`）。所以 `build-4.sh` 里若有「失败又没被 `|| true`/`if` 包住」
+  的命令，CI 会立刻中止、门禁却会继续跑 —— 门禁可能给一次注定红的 push 开绿灯（不会发坏内容，
+  只是白跑一次 CI）。目前代码里没有这种命令；新增命令时留意。
 - 顺带：脚本里 `git commit` 用 `git -c user.email=… -c user.name=…`，不依赖 runner 上有
   git 身份配置（那是环境相关的，不该假设）。
 
@@ -445,6 +510,15 @@ bash verify-site.sh --build    # 再六条编译路径，和 CI 门禁完全同�
 
 ## 7. 值得注意的坑（已踩过）
 
+- **`git diff --name-only` 默认会转义非 ASCII 路径**（2026-10 实测，严重）：文件夹名允许汉字 /
+  假名 / emoji（§3.8），而 `core.quotePath=true`（默认）把 `slides/中文/main.typ` 输出成
+  `"slides/\346\226\207/main.typ"` —— 编译步骤用 `grep -qF -- "slides/中文/"` 判断「这套 deck
+  改没改」，于是永远匹配不上：**复用旧 PDF 却照写新 stamp**，静默发布旧内容且永不自愈。
+  修法是 `git -c core.quotePath=false diff …`，门禁的 ②b 专门钉这一条。
+  凡是拿 git 输出的路径做字符串比较的地方，都要先想一遍「非 ASCII 会不会被转义或加引号」。
+- **`set -euo pipefail` 下，命令替换里的管道失败会终止整个步骤**：生成导航页那步读 `/Count` 的
+  `pages="$(… | grep -o … | tail -1)"` 在「读不到」时 grep 返回 1 → 整步退出，与注释里承诺的
+  「渲染成空胶囊」正好相反（部署会被整个跳过）。已补 `|| true`。同一步里新增命令替换时留意。
 - `setup-typst` 的 `cache-dependency-path` **只接受单个可编译的 `.typ` 文件**，
   不支持通配符；cache miss 时它会 `typst compile` 这个文件来拉包。
 - **`actions/cache` 的 `if:` 是无效的**（实测）：官方文档写明「cache action 不支持 `if:`，
