@@ -201,18 +201,25 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
   装饰性动效都做了降级：光带用 `@supports (offset-path: rect(...))` 包住（不支持就整条不显示，
   否则会在左上角糊一块渐变色），`prefers-reduced-motion: reduce` 时关闭淡入并隐藏光带，
   键盘焦点用 `:focus-visible` 描边。改 CSS 时请保留这些降级。
-- **首页主题策略**：默认**跟随系统** `prefers-color-scheme`，在 `matchMedia` 的 `change`
-  事件里实时切换（同时保留 `addListener` 分支兼容老 Safari）。用户点过右上角按钮才写
-  `localStorage.theme`，此后以手动选择为准、系统再变也不动。监听器**故意不摘除**：它可重入、
-  有 `saved` 就早退，而在点击回调里 `removeEventListener` 会在回调执行到一半时把自己摘掉，
-  容易写出竞态。想恢复「跟随系统」清掉本站 localStorage 即可。
-  `:root`/`.dark` 变量与太阳/月亮图标都只由 `html.dark` 这一个类驱动，所以「跟随系统」和
-  「手动切换」走同一套状态；手动覆盖时 JS 再用行内 `color-scheme`（优先级高于样式表里
-  `html` / `html.dark` 两条兜底）让表单控件与滚动条一起变。
-  按钮的 `aria-pressed`/`aria-label`/`title` 必须跟主题一致，但 `<head>` 里那段防闪白脚本
-  执行时按钮还没解析出来 → 首屏这次对齐放在 `DOMContentLoaded`，系统主题变化时再同步一次；
-  切换结果通过 `#themeStatus`（`role="status"`）播报。无 JS 时没有 `.dark`，页面恒为浅色，
-  内容与链接不受影响。
+- **首页主题策略（三态循环，不是两态）**：`auto` / `light` / `dark`，右上角按钮依次循环。
+  - `auto`（默认，也是 localStorage 没存 `theme` 时的状态）：**每次加载都重新读**浏览器的
+    `prefers-color-scheme`，并在 `matchMedia` 的 `change` 事件里实时跟随。所以「首次打开按浏览器、
+    之后每次刷新也按浏览器」在不手动干预时始终成立。图标角上一个小圆点（`[data-mode="auto"]::after`）
+    表示正在跟随系统。
+  - `light` / `dark`：用户明确选过才写进 `localStorage.theme` 固定下来；回到 `auto` 时
+    `removeItem` 把键清掉，否则刷新后又被固定住。
+  - **为什么不是两态**：二态按钮没有「跟随系统」这个位置，一按就只能写死，检测于是永远失效
+    （这正是改之前的毛病）。三态把 auto 变成可见、可切回的状态。
+  - **关键实现坑**：应用主题必须判断模式——`apply(mode === "auto" ? query.matches : mode === "dark")`。
+    若照抄成 `apply(query.matches)`，每次系统变化/刷新都会把手动选择覆盖掉，固定模式形同虚设
+    （写了这个 bug，被 `ok/fail` 断言抓出来）。
+  - 其它实现细节：点击用**事件委托**（脚本在 `<head>`、先于按钮执行，不能直接
+    `getElementById(...).addEventListener`）；`aria-label`/`title` 说明「当前模式 + 点一下去哪」，
+    `aria-pressed` 只反映当前是否为深色；切模式时通过 `#themeStatus`（`role="status"`）播报，
+    首屏那次不播报（用 `announcedMode` 比较）。`localStorage` 全部包在 `try/catch` 里。
+  - `:root`/`.dark` 变量与太阳/月亮图标只由 `html.dark` 驱动；JS 另写行内 `color-scheme`
+    （优先级高于样式表里 `html` / `html.dark` 两条兜底）让表单控件与滚动条一起变。
+    无 JS 时没有 `.dark`，页面恒为浅色，内容与链接不受影响。
 - **产物**：`slides-build`（普通 artifact，给 release job 下载，`retention-days: 3`）+
   `github-pages`（`actions/upload-pages-artifact@v5`，给 deploy job，自带 1 天保留期）。
   两份都只在同一次运行内使用，所以保留期压得很短，避免长期堆积；留 3 天是为了隔天

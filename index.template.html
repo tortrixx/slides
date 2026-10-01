@@ -6,9 +6,11 @@
       站点首页模板。
       构建时 workflow 会替换三处占位注释（SLIDES / COUNT / META），产物是 build/index.html。
       其中 SLIDES 是服务端渲染出来的幻灯片卡片，所以不依赖 JS；JS 只负责深浅色。
-      主题策略：默认跟随浏览器的 prefers-color-scheme，系统切换时页面实时跟着变；
-      用户点过右上角按钮就记进 localStorage，从此以手动选择为准（系统再变也不动）。
-      想恢复「跟随系统」清掉本站的 localStorage 即可。
+      主题是三态循环，右上角按钮依次切 auto → 浅色 → 深色 → auto：
+        * auto（默认）：每次加载都重新读浏览器的 prefers-color-scheme，系统切换时实时跟随，
+          图标角上有个小圆点表示「正在跟随系统」；
+        * 浅色 / 深色：用户明确选过才写进 localStorage 固定下来（auto 会清掉那个键）。
+      所以「第一次打开按浏览器、之后每次刷新也按浏览器」在不手动干预时始终成立。
       JS 被禁用时没有 .dark，页面恒为浅色，内容与链接不受影响。
       样式沿用 tortrixx/tortrixx（Astro + shadcn + magicui）的视觉语言：
       等宽字体、中性色阶、虚线网格背景、hover 光边框、淡入、深浅色切换。
@@ -179,6 +181,7 @@
         align-items: center;
       }
       .icon-btn {
+        position: relative;
         margin-right: 0.25rem;
         padding: 5px;
         border: 0;
@@ -197,8 +200,21 @@
         height: 22px;
         width: 22px;
       }
-      /* 浅色下只亮太阳、深色下只亮月亮（变化只由 .dark 这个类驱动，
-         所以「跟随系统」和「手动切换」走的是同一套图标状态） */
+      /* 自动模式（data-mode="auto"）时在图标角落点一个小圆点：
+         三态循环里「自动」是唯一看不见的状态，用这个点表示「正在跟随系统」 */
+      .icon-btn[data-mode="auto"]::after {
+        content: "";
+        position: absolute;
+        right: 3px;
+        bottom: 3px;
+        width: 5px;
+        height: 5px;
+        border-radius: 9999px;
+        background: currentColor;
+        box-shadow: 0 0 0 1.5px hsl(var(--background));
+      }
+      /* 浅色下只亮太阳、深色下只亮月亮（图标只由 .dark 这个类驱动，
+         所以「自动跟随」和「手动固定」走的是同一套状态，只是手动时多一个 data-mode） */
       .icon-sun {
         fill: currentColor;
       }
@@ -416,16 +432,22 @@
       }
     </style>
     <script>
-      // 首次绘制前定好主题，避免闪白。
-      // 没存过选择（含 localStorage 不可用）→ 跟随系统的 prefers-color-scheme，并在系统切换时实时跟随；
-      // 存过选择 → 以手动选择为准，不再跟随系统。
+      // 主题三态：auto / light / dark，localStorage 里只存一个键 theme。
+      //   * auto（默认，也是没存过时的状态）：每次加载都重新读浏览器的 prefers-color-scheme，
+      //     系统切换时实时跟随 —— 所以「每次刷新都按当前浏览器主题」成立；
+      //   * light / dark：用户明确选过才固定下来，并停止跟随系统。
+      // 为什么不是二态按钮：二态没有「跟随系统」这个位置，一按就得写死，检测于是永远失效；
+      // 三态把 auto 变成可见、可切回的状态，矛盾就没了。
+      // 这段在首次绘制前执行，避免闪一下浅色再变深。
       (function () {
         var root = document.documentElement;
         var query = window.matchMedia("(prefers-color-scheme: dark)");
-        var saved;
+        var mode = "auto";
         try {
-          saved = localStorage.getItem("theme");
+          var saved = localStorage.getItem("theme");
+          if (saved === "light" || saved === "dark") mode = saved;
         } catch (e) {}
+        var announcedMode = mode; // 用来判断「模式真的变了」，切模式才播报，首屏不吵
 
         function apply(dark) {
           root.classList.toggle("dark", dark);
@@ -436,22 +458,55 @@
         function syncButton(button) {
           if (!button) return;
           var dark = root.classList.contains("dark");
-          button.setAttribute("aria-pressed", dark ? "true" : "false");
-          button.setAttribute("aria-label", dark ? "切换到浅色主题" : "切换到深色主题");
-          button.title = dark ? "切换到浅色主题" : "切换到深色主题";
+          // data-mode 驱动「自动」的小圆点；label 说明点一下会去哪
+          button.dataset.mode = mode;
+          button.setAttribute("aria-pressed", mode === "dark" ? "true" : "false");
+          var label =
+            mode === "auto"
+              ? "主题：自动，跟随系统（当前" + (dark ? "深色" : "浅色") + "）· 点击切换到浅色"
+              : mode === "light"
+                ? "主题：浅色 · 点击切换到深色"
+                : "主题：深色 · 点击切换到自动";
+          button.setAttribute("aria-label", label);
+          button.title = label;
+          // 切模式时给读屏软件播报一句（首屏那次不播报，免得页面一加载就说话）
+          if (mode !== announcedMode) {
+            announcedMode = mode;
+            var status = document.getElementById("themeStatus");
+            if (status) {
+              status.textContent =
+                mode === "auto"
+                  ? "已切换到自动主题，跟随系统"
+                  : mode === "light"
+                    ? "已固定为浅色主题"
+                    : "已固定为深色主题";
+            }
+          }
         }
         function followSystem() {
-          apply(query.matches);
+          // auto 才取系统值；手动固定时以 mode 为准，否则一刷新/一变化就被系统覆盖
+          apply(mode === "auto" ? query.matches : mode === "dark");
           syncButton(document.getElementById("themeToggle"));
         }
 
-        apply(saved ? saved === "dark" : query.matches);
+        followSystem();
 
-        if (!saved) {
-          // Safari 14 以前只支持已废弃的 addListener
-          if (query.addEventListener) query.addEventListener("change", followSystem);
-          else if (query.addListener) query.addListener(followSystem);
-        }
+        // Safari 14 以前只支持已废弃的 addListener
+        if (query.addEventListener) query.addEventListener("change", followSystem);
+        else if (query.addListener) query.addListener(followSystem);
+
+        // 按钮在这段脚本之后才解析出来，所以点击走事件委托
+        document.addEventListener("click", function (event) {
+          var button = event.target.closest("#themeToggle");
+          if (!button) return;
+          mode = mode === "auto" ? "light" : mode === "light" ? "dark" : "auto";
+          try {
+            if (mode === "auto") localStorage.removeItem("theme");
+            else localStorage.setItem("theme", mode);
+          } catch (e) {}
+          followSystem();
+        });
+
         // 这段脚本在 <head> 里执行，此时按钮还没解析出来，等 DOM 就绪再对齐它的状态
         document.addEventListener("DOMContentLoaded", function () {
           syncButton(document.getElementById("themeToggle"));
@@ -485,8 +540,9 @@
             id="themeToggle"
             class="icon-btn"
             type="button"
-            title="切换到深色主题"
-            aria-label="切换到深色主题"
+            data-mode="auto"
+            title="主题：自动，跟随系统 · 点击切换到浅色"
+            aria-label="主题：自动，跟随系统 · 点击切换到浅色"
             aria-pressed="false"
           >
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
@@ -537,27 +593,6 @@
       <!--META-->
     </footer>
     <span id="themeStatus" class="sr-only" role="status" aria-live="polite"></span>
-
-    <script>
-      // 深浅色切换：点一下就把选择固化进 localStorage，之后不再跟随系统（想恢复跟随清掉站点数据即可）
-      document.getElementById("themeToggle").addEventListener("click", function () {
-        var root = document.documentElement;
-        var dark = root.classList.toggle("dark");
-        root.style.colorScheme = dark ? "dark" : "light";
-
-        this.setAttribute("aria-pressed", dark ? "true" : "false");
-        var label = dark ? "切换到浅色主题" : "切换到深色主题";
-        this.setAttribute("aria-label", label);
-        this.title = label;
-
-        try {
-          localStorage.setItem("theme", dark ? "dark" : "light");
-        } catch (e) {}
-
-        var status = document.getElementById("themeStatus");
-        if (status) status.textContent = dark ? "已切换到深色主题" : "已切换到浅色主题";
-      });
-    </script>
 
     <noscript>
       <p class="sr-only">当前浏览器未启用 JavaScript，页面固定为浅色主题。</p>
