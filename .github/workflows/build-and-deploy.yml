@@ -267,8 +267,17 @@ jobs:
             # 1 KB 以下显示 B；不到 1 MiB 的用 KB（封顶 1023，免得 1048575 被四舍五入成 "1024 KB"）
             size="$(awk -v b="$bytes" 'BEGIN { if (b < 1024) { printf "%d B", b } else if (b < 1048576) { kb = b / 1024; if (kb > 1023) kb = 1023; printf "%.0f KB", kb } else { printf "%.1f MB", b / 1048576 } }')"
 
+            # 页数：Typst 产出的 PDF 是未压缩的，页树根节点的 /Count 就是总页数
+            # （已核对 26-09-30=49、template=20，与逐页渲染数一致）。
+            # 取 /Count 的最大值而不是第一个，避免个别 struct tree 的计数排在前面；
+            # 再限定 1–4 位数字，免得二进制里凑巧出现的字节被当成计数。
+            # 万一以后 PDF 被压缩、这里读不到，会渲染成空胶囊（不至于显示错的页数）。
+            pages="$(strings "$pdf" | grep -o '/Count [0-9]\{1,4\}' | awk '{print $2}' | sort -n | tail -1)"
+            pages_html="<span class=\"badge\">${pages} 页</span>"
+
             title_html="$(printf '%s' "$title" | escape)"
             name_html="$(printf '%s' "$name" | escape)"
+            size_html="<span class=\"badge\">${size}</span>"
 
             # 副标题为空（没写 / subtitle: [] / A4 文档）时整行都不输出。
             # 用变量而不是「if 里再写一遍 cat <<HTML」，是为了让卡片结构在整个脚本里只有一份。
@@ -291,9 +300,7 @@ jobs:
                       </a>
                       ${desc_html}
                       <div class="deck-meta">
-                        <span class="badge">PDF</span>
-                        <span class="badge">${size}</span>
-                        <span class="file">${name_html}.pdf</span>
+                        ${pages_html}${size_html}<span class="file">${name_html}.pdf</span>
                       </div>
                     </div>
                     <span class="beam"></span>
