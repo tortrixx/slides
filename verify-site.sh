@@ -143,6 +143,34 @@ STUBEOF
   chk "⑧ RELEASE_VIEW_RETRIES=abc 仍要 fail closed" "$rc" 1
 fi
 
+# ⑧c 「只更新附件」这步（Release 已存在但说明不是我们写的）：本仓库实测 softprops 的更新路径
+#     会 PATCH 整个 release 并返回 403，所以改成了 gh release upload --clobber。
+#     这条断言钉住「用 gh、带 --clobber、没有 PDF 必须 exit 1」。
+ATTACH=""
+for f in "$TMP"/scripts/*.sh; do grep -q 'gh release upload' "$f" 2>/dev/null && ATTACH="$f"; done
+if [ -z "$ATTACH" ]; then
+  bad "找不到「只更新附件」步骤（应含 gh release upload）"
+else
+  ok "找到「只更新附件」步骤"
+  AT="$TMP/attach"; mkdir -p "$AT/build"
+  cat > "$AT/gh" <<'STUBEOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${GH_CALLS:-/dev/null}"
+exit "${GH_RC:-0}"
+STUBEOF
+  chmod +x "$AT/gh"
+  printf 'x\n' > "$AT/build/a.pdf"; printf 'y\n' > "$AT/build/b.pdf"
+  : > "$AT/calls.txt"
+  if ( cd "$AT" && PATH="$AT:$PATH" GH_CALLS="$AT/calls.txt" BUILD_DIR=build TAG=v1.0 GITHUB_REPOSITORY=o/r bash "$ATTACH" ) >/dev/null 2>&1; then rc=0; else rc=$?; fi
+  chk "⑧ 只更新附件：exit" "$rc" 0
+  if grep -q 'release upload v1.0 build/a.pdf build/b.pdf --clobber --repo o/r' "$AT/calls.txt" 2>/dev/null; then
+    ok "⑧ 附件走 gh release upload --clobber（完全不碰 body）"
+  else bad "⑧ 附件上传参数不对：$(head -1 "$AT/calls.txt" 2>/dev/null)"; fi
+  rm -f "$AT/build"/*.pdf
+  if ( cd "$AT" && PATH="$AT:$PATH" BUILD_DIR=build TAG=v1.0 GITHUB_REPOSITORY=o/r bash "$ATTACH" ) >/dev/null 2>&1; then rc=0; else rc=$?; fi
+  chk "⑧ 没有 PDF 时必须 exit 1（替代 action 的 fail_on_unmatched_files）" "$rc" 1
+fi
+
 # ⑧b 「生成 Release 说明」这步也真跑一遍：它决定说明里的下载链接，tag 里的特殊字符
 #     （空格/括号/#/%）必须整体百分号编码，只转义括号会让 Markdown 链接被截断。
 NOTES=""

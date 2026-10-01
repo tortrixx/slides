@@ -377,9 +377,14 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
   `<!-- ci-managed -->`（渲染后不可见）。`gh release view --json body` 读回来带这个标记 → `ours=true`，
   才允许重写说明；没标记（用户手写、或旧版工作流建的）→ **只覆盖同名附件，一个字都不动**。
   三条步骤条件是完整划分：`exists=false || ours=true` → 生成说明 + 发布（带 body）；
-  `exists=true && ours!=true` → 只更新附件。为什么这么改：原来的条件是「managed=true 就刷说明」，
-  而 managed 只看「这次是不是 main push」—— 用户手动建/手改了当天日期 Release 的说明后，
-  同一天再 push 就会把他的手写说明整段盖掉（不可恢复）。
+  `exists=true && ours!=true` → **只更新附件**。
+  为什么用标记而不是只看 managed：原来的条件是「managed=true 就刷说明」，而 managed 只看
+  「这次是不是 main push」—— 用户手动建/手改了当天日期 Release 的说明后，同一天再 push 就会
+  把他的说明整段盖掉（不可恢复）。
+  最后那条路径**刻意不用 softprops、改用 `gh release upload --clobber`**：softprops 的更新路径
+  会 PATCH 整个 release，**实测在本仓库返回 `403 Resource not accessible by integration`**
+  （同一个 job、同一个 token 上传附件却是成功的，2026-10-01 的运行日志有据），而 gh 只动附件、
+  天然不碰 body —— 语义上正是我们要的，也不会因为一次无关的 PATCH 让发版失败。
   **一次性副作用**：改造前建的 Release body 里没有标记，所以它们不会再有说明刷新（附件照常更新）；
   跨天新建的 Release 就正常了。
 - `exists` / `ours` 用 `gh release view <tag> --json body` 一次拿到，但**只有明确报
@@ -435,8 +440,8 @@ typst compile --format png --pages 6 main.typ '/tmp/p-{p}.png'
 # 本地 Typst 版本应与 workflow 的 TYPST_VERSION 一致（当前 0.15.1）
 
 # 本地跑门禁（CI 里也是同一条命令；改完 workflow 务必先本地过一遍）
-bash verify-site.sh            # 只做静态部分（24 项，含 Release/tag 逻辑，几秒）
-bash verify-site.sh --build    # 再加七条编译路径（共 76 项），和 CI 门禁完全同一条命令
+bash verify-site.sh            # 只做静态部分（28 项，含 Release/tag 逻辑，几秒）
+bash verify-site.sh --build    # 再加七条编译路径（共 80 项），和 CI 门禁完全同一条命令
 
 # 查看线上状态
 gh run list --repo tortrixx/slides
@@ -467,11 +472,11 @@ CI 逻辑全在 YAML 的 `run: |` 里，改完不能只靠肉眼。**`verify-sit
 （`verify` job 跑 `--build`），本地可以先跑一遍再推：
 
 ```bash
-bash verify-site.sh            # 静态检查 + Release/tag 逻辑（24 项，几秒，不需要 typst）
-bash verify-site.sh --build    # 再加七条编译路径（共 76 项），和 CI 门禁完全同一条命令
+bash verify-site.sh            # 静态检查 + Release/tag 逻辑（28 项，几秒，不需要 typst）
+bash verify-site.sh --build    # 再加七条编译路径（共 80 项），和 CI 门禁完全同一条命令
 ```
 
-当前基线：`--build` 全绿 = **76 项通过**（静态 24 + 编译路径 52），覆盖这些路径：
+当前基线：`--build` 全绿 = **80 项通过**（静态 28 + 编译路径 52），覆盖这些路径：
 ① 冷启动全量（含 `assets/icon.png` 确实进了 `build/`，以及 COUNT/META 两个占位符**真的注入了**）
 ①b **HTML 转义**：造一个标题含 `& < >` 的 deck，断言产物里是实体且没有原始标签（转义回归是注入风险）
 ② 只改一个 deck 的增量
@@ -485,6 +490,8 @@ bash verify-site.sh --build    # 再加七条编译路径（共 76 项），和 
 ⑧ Release/tag 逻辑（stub 掉 `gh`）：三种入口算出的 tag/managed、not found→`exists=false`、
 403→重试后 fail closed、`RELEASE_VIEW_RETRIES=abc` 不许静默降级、机器标记决定 `ours`、
 说明里的 tag 被整体百分号编码、说明末尾带标记
+⑧c 「只更新附件」那步走 `gh release upload --clobber`（不用 action：它 PATCH release 会 403）、
+没有 PDF 时必须 `exit 1`
 ⑨ 事件维度（用两套 1 页 A4 的极小夹具）：main push + stamp 匹配 → 增量；TYPST_VERSION 失配 /
 workflow_dispatch / 非 main push → 全量重编。
 
@@ -500,11 +507,11 @@ workflow_dispatch / 非 main push → 全量重编。
   写死过 `TYPST_VERSION`，后果实测很严重：workflow 一升级版本号，脚本造的 stamp 里的版本就和
   真正会写的那份不一致 → 走进「编译环境变了 → 全量」分支 → ②③ 的增量断言全挂。
   实测对比（把 workflow 的版本改成 9.9.9）：**写死版 2 通过 / 17 失败（exit 127）**，
-  读 env 版 **19 通过 / 0 失败**（当时还没加 env 断言，现在是 76 项）。这类假红比漏报更糟 —— 它会诱使人把测试改松。
+  读 env 版 **19 通过 / 0 失败**（当时还没加 env 断言，现在是 80 项）。这类假红比漏报更糟 —— 它会诱使人把测试改松。
 - **typst 包缓存要显式指到临时目录**：脚本默认 `TYPST_PACKAGE_CACHE_PATH="$TMP/typst-pkg"`
   （外部设了就尊重外部值）。typst 默认写 `$HOME`，HOME 不可写时每套 deck 都会报
   `failed to create temporary package directory` —— 看起来像 deck 坏了，是典型假红
-  （本机沙箱就踩过：不设这个变量 12 通过 / 11 失败，设了才 76/0）。CI 里 HOME 可写、
+  （本机沙箱就踩过：不设这个变量 12 通过 / 11 失败，设了才 80/0）。CI 里 HOME 可写、
   本来也没缓存这个目录，所以行为不变。
 - **夹具先做一次快照提交**：`fresh()` 复制完仓库会 `git add -A && commit` 一次。原因是工作树里
   未提交的改动（比如刚 `cp -R` 出来的新 deck）不在 `git diff <基准> HEAD` 里，会让 ② 的

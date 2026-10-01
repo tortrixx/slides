@@ -686,11 +686,25 @@ jobs:
       # 已经存在的其它版本化 Release（例如从网页发布）：只补/覆盖附件，不传 body
       - name: 只更新附件（已有 Release 的说明不是自动生成的）
         # 覆盖剩下所有情况：Release 已存在、且说明里没有我们的标记（用户手写 / 旧版工作流建的）。
-        # 只补/覆盖同名附件，**不传 body_path**，所以手写说明原样保留。
+        # 这里**刻意不用 action**，改用 gh 直接传附件：gh release upload 只动附件、
+        # 天然不会碰 body；而 softprops 的更新路径会 PATCH 整个 release，实测在本仓库返回
+        # `403 Resource not accessible by integration`（同一 token 上传附件却是成功的，
+        # 见 2026-10-01 的运行日志），所以这条路必须绕开它。
         if: steps.version.outputs.exists == 'true' && steps.version.outputs.ours != 'true'
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ steps.version.outputs.tag }}
-          files: ${{ env.BUILD_DIR }}/*.pdf
-          overwrite_files: true
-          fail_on_unmatched_files: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          n=0
+          for f in "$BUILD_DIR"/*.pdf; do
+            [ -e "$f" ] || continue
+            n=$((n + 1))
+          done
+          [ "$n" -gt 0 ] || { echo "::error::$BUILD_DIR 下没有 PDF 可上传"; exit 1; }
+
+          # --clobber：同名附件先删后传（同一天重复 push 靠它保持最新）；
+          # 未加引号的 glob 由 shell 展开，每个文件一个参数，含空格的路径也安全。
+          gh release upload "$TAG" "$BUILD_DIR"/*.pdf --clobber --repo "$GITHUB_REPOSITORY"
+          echo "已更新 ${TAG} 的附件（${n} 个）；说明未改动"
