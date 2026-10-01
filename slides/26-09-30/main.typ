@@ -7,7 +7,6 @@
   aspect-ratio: "16-9",
   config-info(
     title: [Intelligent Agents],
-    subtitle: [From Theory to Modern AI Systems],
     author: [Your Name],
     date: datetime.today(),
     institution: [AI Research Group],
