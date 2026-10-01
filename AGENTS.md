@@ -44,8 +44,7 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
 ├── .github/workflows/
 │   └── build-and-deploy.yml  # 全部自动化逻辑（唯一的 CI 文件）
 ├── index.template.html       # 站点首页模板（构建时注入幻灯片列表）
-├── verify-site.sh            # 本地校验：抽 workflow 脚本 + 语法/lint + 真跑六条编译路径
-├── verify-theme.js           # 本地校验：首页主题三态逻辑（17 条断言）
+├── verify-site.sh            # CI 门禁脚本：抽 workflow 脚本 + 语法/lint + 真跑六条编译路径
 ├── AGENTS.md                 # 本文件
 ├── README.md                 # 6 行：定位一句话 + 在线地址，不放任何清单/操作
 └── .gitignore                # 忽略 build/ 与本地编译出的 slides/*.main.pdf
@@ -146,10 +145,11 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
 | `release: published` | 只给该 Release 补/覆盖附件，不动说明 |
 | `workflow_dispatch` | 手动：选 `main` 则编译+部署；不发版 |
 
-### 三个 job
+### 四个 job
 
 | job | 条件 | 权限 | 作用 |
 | --- | --- | --- | --- |
+| `verify` | `github.event.deleted != true` | 默认（`contents: read`） | 门禁：跑 `verify-site.sh --build`（六条路径），失败则后面全部不执行 |
 | `build` | `github.event.deleted != true` | `contents: read` | 装字体 → 增量编译 → 生成导航页 → 上传两份产物 |
 | `deploy` | `refs/heads/main` 的 push 或手动 | `pages: write`, `id-token: write` | `actions/deploy-pages` 发布 `build/` |
 | `release` | main push / 推送 tag / release 事件 | `contents: write` | 计算 tag → 写说明 → 建/更新 Release |
@@ -305,17 +305,20 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
 - 发布用 `softprops/action-gh-release@v3` + `overwrite_files: true`（同一天重复 push 靠它覆盖）。
 - **tag 一旦创建就不再移动**：同一天的附件会更新，但 tag 停在当天第一次 push 的提交。
   移动已存在的 tag 会让所有克隆的 `git fetch --tags` 报 `would clobber existing tag`。
-- `build` 与 `release` 都有 `if: github.event.deleted != true` 防护：
+- `verify` / `build` / `release` **三个 job 都有** `if: github.event.deleted != true` 防护：
   **删除 tag/分支同样会产生 push 事件**，没有这个防护，删掉 `v2026.09.30` 后工作流会
-  判定该版本不存在而把它重新创建出来。
+  判定该版本不存在而把它重新创建出来。（`verify` 也带这个条件，是为了「删分支」这类事件
+  不必白跑一遍校验。）
 
 ### 运维备忘
 
-- **换默认分支**（比如 `main` → `master`）要一起改 workflow 里**全部 5 处**：顶部的
-  `branches:` 触发器，3 处 `if`（`build` 的 `run` 里、`deploy`、`release`），
-  以及增量编译判断里的 `[ "$GITHUB_REF" = "refs/heads/main" ]`。
+- **换默认分支**（比如 `main` → `master`）要一起改 workflow 里**全部 6 处**：顶部的
+  `branches:` 触发器，4 处 `if`（`verify`、`build` 各一处 `github.event.deleted != true`；
+  `deploy`、`release` 各一处分支判断），以及增量编译判断里的
+  `[ "$GITHUB_REF" = "refs/heads/main" ]`。
   漏掉最后那处不会报错，但每次都退化成全量编译。用
-  `grep -n 'branches:\|refs/heads/main' .github/workflows/build-and-deploy.yml` 全部找出来改。
+  `grep -n 'branches:\|refs/heads/main\|event.deleted' .github/workflows/build-and-deploy.yml`
+  全部找出来改（改 `deploy`/`release` 时注意别把 `verify`/`build` 的删除防护一起改掉）。
 - **`deploy` 报 Pages 未启用**：Settings → Pages → Build and deployment → Source 选
   **GitHub Actions**。
 - **某套幻灯片编译失败**：站点与 Release 都会整次跳过，不会发布残缺内容；日志里会指出
@@ -333,10 +336,9 @@ typst compile --format png --pages 6 main.typ '/tmp/p-{p}.png'
 
 # 本地 Typst 版本应与 workflow 的 TYPST_VERSION 一致（当前 0.15.1）
 
-# 本地跑两道校验（改完 workflow / 首页后都要过一遍）
-bash verify-site.sh --build    # workflow：静态检查 + 六条编译路径（19 项）
-node verify-theme.js           # 首页：主题三态逻辑（17 项）
-node verify-theme.js build/index.html   # 也可以直接测构建产物
+# 本地跑门禁（CI 里也是同一条命令；改完 workflow 务必先本地过一遍）
+bash verify-site.sh --build    # 静态检查 + 六条编译路径（19 项）
+bash verify-site.sh            # 只做静态部分，几秒（不真编译）
 
 # 查看线上状态
 gh run list --repo tortrixx/slides
@@ -363,24 +365,33 @@ RUNNER_TEMP=/tmp/rt BUILD_DIR=build RELEASE_TZ=Asia/Shanghai \
 
 ## 6. 改 workflow 后的验证清单（务必执行）
 
-CI 逻辑全在 YAML 的 `run: |` 里，改完不能只靠肉眼。**仓库根目录有两个校验脚本**
-（一个管 workflow，一个管首页），改完直接跑：
+CI 逻辑全在 YAML 的 `run: |` 里，改完不能只靠肉眼。**`verify-site.sh` 就是 CI 门禁本身**
+（`verify` job 跑 `--build`），本地可以先跑一遍再推：
 
 ```bash
 bash verify-site.sh            # 静态检查：抽脚本 + bash -n + 多字节 lint（几秒）
-bash verify-site.sh --build    # 再真跑六条编译路径（需要本地 typst，十几秒）
-node verify-theme.js           # 首页主题脚本的 17 条断言（改 index.template.html 后必跑）
+bash verify-site.sh --build    # 再六条编译路径，和 CI 门禁完全同一条命令
 ```
 
-**`verify-theme.js` 不是抄一份逻辑来测**：它把模板里那段内联 `<script>` 取出来，
-放进最小 DOM 桩里执行，所以测的就是页面上真正会跑的代码。它对回归确有拦截力
-（做过变异测试：把 `.icon-sun` 从基础隐藏规则里拿掉 → 17 项里挂 1 项；
-把 `apply()` 改回无条件用系统值 → 挂 5 项；回到 auto 时不清 localStorage → 挂 1 项）。
-首页那段代码历史上出过两个只有断言才能发现的 bug，别只靠肉眼和截图。
-
-`verify-site.sh --build` 当前基线是全绿 = 19 项通过。它覆盖的六条路径：
+当前基线：`--build` 全绿 = 19 项通过，覆盖六条路径：
 ① 冷启动全量 ② 只改一个 deck 的增量 ③ 删除某套后清理残留 PDF
 ④ 某套编译失败必须 `exit 1` ⑤ 文件夹名非法必须 `exit 1` ⑥ 一套都没有必须 `exit 1`。
+
+**为什么这个门禁值得存在**：这六条守的都是**静默失效**的不变量 —— stamp 基准错了会
+长期复用旧 PDF、护栏失效会做出坏链接、失败没 `exit 1` 会发布残缺站点。它们破了不报错，
+只是安静地出错，所以必须靠真跑一遍来守。反过来，`bash -n` 那类静态检查当门禁是**零增量**
+（语法错 GitHub 起不来 job、运行时也立刻炸），所以门禁的价值全在 `--build` 那部分。
+
+**门禁的结构约束（别改坏）**：
+- 必须是**独立 job**。塞进 `build` 的步骤里有坑：`build` 最后会写 `.build-stamp`，
+  如果顺序成了「编译 → 写 stamp → 门禁失败」，stamp 已落盘，下次 push 会以为编译过了而
+  跳过重编 —— 门禁反而制造了它本该防的那种不一致。
+- `build` 靠 `needs: verify` 依赖它，所以门禁红了站点和 Release 都不会动（fail closed）。
+- 门禁会自己触发全量重编：workflow 文件哈希进了 stamp，所以**改 workflow 必然全量编译**，
+  而门禁又额外编译约 5 遍。这个成本只落在「改了 workflow」的 push 上，日常改 deck 不受影响。
+- 门禁 job 也装了字体（和 build 同一套）。脚本要真编译含中文的 deck，字体齐全才能保证
+  不因环境差异假红。注意 **`--font-path` 是追加、不是限制**（实测带空目录时字体数不变：
+  394 → 394），所以没法用它模拟「没装字体」来验证这件事。
 
 手工做的话，对应下面几步（脚本就是照这个写的）：
 

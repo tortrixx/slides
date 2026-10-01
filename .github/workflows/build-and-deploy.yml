@@ -41,10 +41,52 @@ permissions:
 
 jobs:
   # ---------------------------------------------------------------------------
+  # 0) 门禁：本地校验脚本（verify-site.sh）当 CI 门禁跑。
+  #
+  # 为什么值得单开一个 job 而不是塞进 build：这段 CI 逻辑里有几个**静默失效**的不变量
+  # ——stamp 基准、文件夹名护栏、编译失败必须 exit 1、删了 deck 要清残留。它们破了不会
+  # 报错，只会安静地发布残缺内容或复用旧 PDF。verify-site.sh --build 真跑六条路径来守它们。
+  #
+  # 为什么不塞进 build 的步骤里：build 最后会写 .build-stamp。若「编译 → 写 stamp →
+  # 门禁失败」这个顺序成立，stamp 已经落盘，下次 push 会以为编译过了而跳过重编 ——
+  # 门禁反而制造了它本该防的那种不一致。独立 job 从结构上避免。
+  #
+  # 为什么放在最前面：只需要 checkout + Typst，比 build 少了装字体，失败得更快；
+  # build 用 needs 依赖它，红了就整体不部署。
+  # ---------------------------------------------------------------------------
+  verify:
+    name: 校验 CI 逻辑（门禁）
+    runs-on: ubuntu-latest
+    if: github.event.deleted != true
+    # 这个 job 会自己编译 5 次（六条路径里的五条），给个上限免得异常时一直挂着
+    timeout-minutes: 10
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v7
+
+      - name: 安装模板字体（Noto Sans CJK SC / Inter）
+        run: |
+          # 和 build job 装同一套：脚本要真的编译 deck（含中文），字体齐全才能保证
+          # 它不会因为环境差异而假红。故意不装 fonts-noto-cjk-extra（理由见 build job）。
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fonts-noto-cjk fonts-inter \
+            || sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+          fc-cache -f
+
+      - name: 安装 Typst
+        uses: typst-community/setup-typst@v5
+        with:
+          typst-version: ${{ env.TYPST_VERSION }}
+
+      - name: 跑 verify-site.sh --build
+        run: bash verify-site.sh --build
+
+  # ---------------------------------------------------------------------------
   # 1) 安装字体、编译幻灯片（增量）、准备好 Pages 站点内容
   # ---------------------------------------------------------------------------
   build:
     name: 编译幻灯片
+    needs: verify
     runs-on: ubuntu-latest
     # 删除 tag / 分支同样会产生 push 事件（deleted: true）。必须忽略，
     # 否则删掉 v2026.09.30 之后工作流会认为「该版本不存在」而把它重新创建出来。
