@@ -1,11 +1,12 @@
 # AGENTS.md
 
 给在本仓库工作的 AI agent（以及未来的维护者）的技术说明。
-**面向使用者的精简说明在 [README.md](README.md)**，本文件放实现细节、约定和坑。
+**README 只有一页「有什么」**，本文件放全部操作说明、实现细节和坑。
 
-> 文档分工（请务必遵守）：**README 只讲「怎么用」，保持极简**；
-> 所有注意事项、机制说明、踩坑记录都写在本文件。不要因为「用户可能不知道」就往 README 里加
-> 提示、警示、边角情况——需要时在本文件里写清楚，README 最多留一行指路。
+> 文档分工（请务必遵守）：**README 只讲「仓库里有什么」，保持极简**——只列幻灯片清单、
+> 在线地址、以及「文件夹名即 URL」这条约束，不写操作步骤、不写注意事项；
+> 所有操作说明、机制、注意事项、踩坑记录都写在本文件。
+> 不要因为「用户可能不知道」就往 README 里加提示、警示、边角情况——需要时在本文件里写清楚。
 
 ---
 
@@ -21,6 +22,9 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
 
 **唯一的目录约定**：`slides/<名称>/main.typ` 存在 → 编译成 `<名称>.pdf`。
 没有 `main.typ` 的文件夹会被忽略（可以安全地放笔记、素材）。
+
+新建一套幻灯片：`cp -R slides/template slides/my-talk`（连 `src/` 等资源目录一起复制），
+改名和内容后 push 即可。README 只讲仓库里有什么，操作细节都记在本文件。
 
 - 仓库：`tortrixx/slides`，默认分支 `main`
 - 站点：<https://tortrixx.github.io/slides/>（Pages Source = GitHub Actions，已开启）
@@ -39,7 +43,7 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
 │   └── build-and-deploy.yml  # 全部自动化逻辑（唯一的 CI 文件）
 ├── index.template.html       # 站点首页模板（构建时注入幻灯片列表）
 ├── AGENTS.md                 # 本文件
-├── README.md                 # 用户文档
+├── README.md                 # 一页概览：有哪些幻灯片、在线地址
 └── .gitignore                # 忽略 build/ 与本地编译出的 slides/*.main.pdf
 ```
 
@@ -214,6 +218,19 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
 - `build` 与 `release` 都有 `if: github.event.deleted != true` 防护：
   **删除 tag/分支同样会产生 push 事件**，没有这个防护，删掉 `v2026.09.30` 后工作流会
   判定该版本不存在而把它重新创建出来。
+
+### 运维备忘
+
+- **换默认分支**（比如 `main` → `master`）要一起改 workflow 里**全部 5 处**：顶部的
+  `branches:` 触发器，3 处 `if`（`build` 的 `run` 里、`deploy`、`release`），
+  以及增量编译判断里的 `[ "$GITHUB_REF" = "refs/heads/main" ]`。
+  漏掉最后那处不会报错，但每次都退化成全量编译。用
+  `grep -n 'branches:\|refs/heads/main' .github/workflows/build-and-deploy.yml` 全部找出来改。
+- **`deploy` 报 Pages 未启用**：Settings → Pages → Build and deployment → Source 选
+  **GitHub Actions**。
+- **某套幻灯片编译失败**：站点与 Release 都会整次跳过，不会发布残缺内容；日志里会指出
+  是哪个 `main.typ`，修好再推即可（stamp 机制保证下次必然重编它）。
+- **`build/` 不要提交**：CI 产物，已在 `.gitignore` 里。
 
 ## 5. 常用命令
 
