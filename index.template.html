@@ -202,19 +202,21 @@
       /* 三种模式各配一个图标，只显示当前那个：
          太阳 = 浅色、半明半暗的圆 = 自动跟随系统、月亮 = 深色。
          （半明半暗是「自动/对比度」的经典符号，比在太阳/月亮角上加小点更干净，
-          三个图标分量也相当。）没有 data-mode 时（JS 被禁用）按默认显示太阳。 */
+          三个图标分量也相当。）没有 data-mode 时（JS 被禁用）按默认显示太阳。
+
+         写法上让**默认全部隐藏**（.icon-sun 也一起隐藏），只由「当前模式」那条规则
+         打开一个 —— 这样任何情况下最多只有一个图标可见，不会出现太阳和月亮同时画出、
+         叠在一起（曾经用「基础的 display:none + 两条按模式覆盖」的写法，深色下太阳没被
+         藏住，两个图标就叠在一起了；这种「只显式打开一个」的写法从结构上排除该问题）。 */
+      .icon-sun,
       .icon-auto,
       .icon-moon {
         display: none;
       }
-      .icon-btn[data-mode="auto"] .icon-sun,
-      .icon-btn[data-mode="light"] .icon-moon,
-      .icon-btn[data-mode="dark"] .icon-auto {
-        display: none;
-      }
-      .icon-btn[data-mode="auto"] .icon-auto,
-      .icon-btn[data-mode="light"] .icon-sun,
-      .icon-btn[data-mode="dark"] .icon-moon {
+      [data-mode="light"] .icon-sun,
+      [data-mode="dark"] .icon-moon,
+      [data-mode="auto"] .icon-auto,
+      .icon-btn:not([data-mode]) .icon-sun {
         display: block;
       }
       /* 太阳与月亮是实心字形；显示哪一个完全由上面的 data-mode 决定，

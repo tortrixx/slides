@@ -207,11 +207,28 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
     之后每次刷新也按浏览器」在不手动干预时始终成立。
   - **图标按模式换，不是「太阳/月亮 + 小圆点」**：`data-mode` 决定显示哪一个——
     浅色=太阳、深色=月亮、**自动=半明半暗的圆**（`<circle>` 描边 + 右半 `<path>` 填充；
-    这是「自动/对比度」的经典符号）。三个图标都由 CSS 的 `display` 切换，不再用 `fill: transparent`
-    「关灯」，所以 hover 的 `currentColor` 能正常跟随。
-    早先试过在太阳/月亮角上加 5px 小圆点表示自动，但那个点太小、不像个图标，已经换掉。
-    注意：**别用「实心圆 + 月牙挖空」那种自创路径**——在 24 网格里实心圆会把挖空盖掉，
-    渲染出来就是一坨黑圆（用无头 Chrome 渲染预览才看出来）。
+    这是「自动/对比度」的经典符号）。早先试过在太阳/月亮角上加 5px 小圆点表示自动，
+    但那个点太小、不像个图标，已经换掉。
+  - **图标显隐必须写成「默认全隐藏，只打开当前那个」**，别写成「基础的 `display: none`
+    + 两条按模式覆盖」：后者上线后深色模式下太阳没被藏住，**太阳和月亮叠在一起画出来**
+    （用户截图发现）。现在是这样，任何情况下最多一个可见：
+
+    ```css
+    .icon-sun, .icon-auto, .icon-moon { display: none; }
+    [data-mode="light"] .icon-sun,
+    [data-mode="dark"]  .icon-moon,
+    [data-mode="auto"]  .icon-auto,
+    .icon-btn:not([data-mode]) .icon-sun { display: block; }
+    ```
+
+    查这类「明明写了 display:none 却还在」的问题，**别只看 CSS 有没有写对**：
+    用无头 Chrome 跑一段探针，对三种模式分别 `getBoundingClientRect()` 看谁不是 0×0，
+    一眼就能定位（当时就是靠它确认 `dark` 下 sun=22×22、moon=18×18 同时存在）。
+    注意本机 headless 默认 `prefers-color-scheme: dark`，要截浅色得显式
+    `--blink-settings=preferredColorScheme=1`；截图前还要关掉 `.fade` 的入场动画，
+    否则元素是 `opacity: 0`，截出来一片空白（会误判成"没渲染"）。
+  - 注意：**别用「实心圆 + 月牙挖空」那种自创路径**画半明半暗——在 24 网格里实心圆会把
+    挖空盖掉，渲染出来就是一坨黑圆（无头 Chrome 渲染预览才看出来）。
   - `light` / `dark`：用户明确选过才写进 `localStorage.theme` 固定下来；回到 `auto` 时
     `removeItem` 把键清掉，否则刷新后又被固定住。
   - **为什么不是两态**：二态按钮没有「跟随系统」这个位置，一按就只能写死，检测于是永远失效
