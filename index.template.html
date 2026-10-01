@@ -7,9 +7,9 @@
       构建时 workflow 会替换三处占位注释（SLIDES / COUNT / META），产物是 build/index.html。
       其中 SLIDES 是服务端渲染出来的幻灯片卡片，所以不依赖 JS；JS 只负责深浅色。
       主题是三态循环，右上角按钮依次切 auto → 浅色 → 深色 → auto：
-        * auto（默认）：每次加载都重新读浏览器的 prefers-color-scheme，系统切换时实时跟随，
-          图标角上有个小圆点表示「正在跟随系统」；
+        * auto（默认）：每次加载都重新读浏览器的 prefers-color-scheme，系统切换时实时跟随；
         * 浅色 / 深色：用户明确选过才写进 localStorage 固定下来（auto 会清掉那个键）。
+      按钮的图标跟着模式换：浅色=太阳、深色=月亮、自动=半明半暗的圆（三者只显示一个）。
       所以「第一次打开按浏览器、之后每次刷新也按浏览器」在不手动干预时始终成立。
       JS 被禁用时没有 .dark，页面恒为浅色，内容与链接不受影响。
       样式沿用 tortrixx/tortrixx（Astro + shadcn + magicui）的视觉语言：
@@ -75,10 +75,6 @@
          浅色，深色模式下特别明显（用户截图报过）。 */
       html {
         color-scheme: light;
-        /* 背景设在根元素：html 铺满整个视口，页面比内容高时下面也是对的颜色。
-           曾经只把 background 设在 body 上 —— Chrome 会把 body 背景提升成画布背景，
-           但 Safari 不会（body 只有 width:90%、不是全宽矩形），于是内容高度以下露出一条
-           浅色，深色模式下特别明显（用户截图报过）。 */
         background: hsl(var(--background));
         /* 给 body 一个百分比高度的参照，视口高度链才完整
            （只在 body 上写 min-height:100vh 时，Safari 里固定定位那层仍可能只覆盖内容高度） */
@@ -484,7 +480,7 @@
         function syncButton(button) {
           if (!button) return;
           var dark = root.classList.contains("dark");
-          // data-mode 驱动「自动」的小圆点；label 说明点一下会去哪
+          // data-mode 决定显示哪个图标；label 说明点一下会去哪
           button.dataset.mode = mode;
           button.setAttribute("aria-pressed", mode === "dark" ? "true" : "false");
           var label =

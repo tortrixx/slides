@@ -35,7 +35,9 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
 ```
 .
 ├── slides/
-│   ├── template/main.typ     # 唯一的模板：前言样板 + 封面/目录/分节 + 各类写法示例
+│   ├── template/             # 唯一的模板：前言样板 + 封面/目录/分节 + 各类写法示例
+│   │   ├── main.typ
+│   │   └── src/README.md     # 空的资源目录（占位说明），cp -R 后会一起复制过去
 │   └── 26-09-30/             # 实际使用的 deck（自带 src/ 图片等资源）
 │       ├── main.typ
 │       └── src/
@@ -106,12 +108,18 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
 9. **非 Touying / A4 文档**：流水线不关心内容形态 —— A4 讲义、读书笔记、论文式文档都能和放映稿
    共存。硬性要求只有三条：`slides/<名称>/main.typ` 存在、能用
    `typst compile main.typ <out>.pdf` 编出 PDF、资源走相对路径。与放映稿的差异：
-   - **标题**：首页取的是 `title:` 那行。A4 用 Typst 原生的 `#set document(title: "…")`，
-     **必须是字符串**；写成 `title: [..]` 会 `error: expected string or array, found content`
-     直接编译失败（实测踩过，且会连带拦住整次部署）。不写则卡片退回文件夹名。
-   - **副标题**：`subtitle:` 属于 `config-info`，A4 文档没有 → 卡片的描述行整行不渲染
-     （见 §4「导航页」）；想让 A4 卡片也带一行说明，就在文档里写 `subtitle:` 是不行的，
-     只能改模板或 workflow。
+   - **标题**：首页取的是 `main.typ` 里第一个 `title:`。A4 用 Typst 原生的
+     `#set document(title: "…")`，**必须是字符串**；写成 `title: [..]` 会
+     `error: expected string or array, found content` 直接编译失败
+     （实测踩过，且会连带拦住整次部署）。不写 `title:` 则卡片退回文件夹名。
+     实测：A4 文档写 `#set document(title: "A4 讲义示例")` → 卡片标题就是它
+     （首页的提取只是按 `title:` 取第一个值，不关心它属于 `config-info` 还是 `document`），
+     不写则退回文件夹名——所以 A4 卡片想要好看的中文标题，写上 `#set document(title: …)` 即可。
+   - **副标题**：`subtitle:` 在放映稿里是 `config-info` 的字段，A4 文档没有 `config-info`，
+     所以**不要在 A4 里写 `subtitle:`**——那行会原样印进正文（实测：PDF 页面上真的出现
+     `subtitle: [A4 也想有说明]` 这一行字），虽然首页确实会把它当描述取走，但代价是正文里
+     多一行源码垃圾。想让 A4 卡片带一行说明，**别用 `subtitle:`**：不写就是描述行整行不渲染，
+     或者改模板 / workflow 另加一个专门的字段。
    - **字体**：A4 文档没有模板前言，需自己
      `#set text(font: ((name: "Inter", covers: "latin-in-cjk"), "Noto Sans CJK SC"), size: 11pt, lang: "zh", region: "cn")`，
      否则中文用回退字体（CI 里只保证这两个字体已安装）。
@@ -172,12 +180,14 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
   已删（与早先删掉 "Built by Typst & Touying." 同理）；提交号也一并不显示了——它是构建提交，
   跟某套幻灯片最后一次改动无关，容易被误读。
   卡片数据来源：
-  - **标题/副标题**：`sed` 从各 deck 的 `config-info(...)` 里取 `title:` / `subtitle:`，依次尝试
+  - **标题/副标题**：`sed` 从 `main.typ` 里取**第一个** `title:` / `subtitle:`，依次尝试
     `[..]` 单独成行 → 单行里的 `[..]` → `".."` 字符串写法；**跳过注释行**（否则
     `// title: [旧标题]` 会中选），单行模式要求键前面不是字母/下划线（否则 `subtitle:` 里的
     `title:` 会被贪婪匹配成标题——实测踩过）。
-    两者回退策略**不同**：`title` 取不到就退回**文件夹名**；`subtitle` 取不到（没写、
-    `subtitle: []`、或 A4 文档这种本来就没有 `config-info` 的）则**整行都不渲染**，
+    注意它**不检查这个键属于谁**：`config-info(title: …)`、A4 的
+    `#set document(title: "…")`、甚至正文里一行 `title: [x]` 都会被取走（后者见 §3.9 的警告）。
+    回退策略**两者不同**：`title` 取不到就退回**文件夹名**；`subtitle` 取不到（没写、
+    `subtitle: []`、或压根没有这一行）则**整行都不渲染**，
     不再塞一句默认文案（旧版是一句「点击卡片在线预览…」，已移除——缺副标题的卡片宁可少一行，
     也不要一句与内容无关的话）。注意 `subtitle: []` 也走「不渲染」，没法用它保留空行。
     实现上 `desc_html` 变量里**只放标签、不放换行**：换行由模板那一行提供，否则空串时会把下一行
@@ -344,7 +354,19 @@ RUNNER_TEMP=/tmp/rt BUILD_DIR=build RELEASE_TZ=Asia/Shanghai \
 
 ## 6. 改 workflow 后的验证清单（务必执行）
 
-CI 逻辑全在 YAML 的 `run: |` 里，改完不能只靠肉眼。推荐流程：
+CI 逻辑全在 YAML 的 `run: |` 里，改完不能只靠肉眼。**仓库根目录有
+`verify-site.sh` 把下面 1–4 步都做成了可执行的**，改完直接跑它：
+
+```bash
+bash verify-site.sh            # 静态检查：抽脚本 + bash -n + 多字节 lint（几秒）
+bash verify-site.sh --build    # 再真跑六条编译路径（需要本地 typst，十几秒）
+```
+
+当前基线：`--build` 全绿 = 19 项通过。它覆盖的六条路径：
+① 冷启动全量 ② 只改一个 deck 的增量 ③ 删除某套后清理残留 PDF
+④ 某套编译失败必须 `exit 1` ⑤ 文件夹名非法必须 `exit 1` ⑥ 一套都没有必须 `exit 1`。
+
+手工做的话，对应下面几步（脚本就是照这个写的）：
 
 1. **解析 YAML 并抽出脚本**（用 Ruby 自带的 psych，避免手抄）：
 
@@ -370,10 +392,18 @@ CI 逻辑全在 YAML 的 `run: |` 里，改完不能只靠肉眼。推荐流程�
 
 4. **在临时副本里跑编译步骤**（覆盖四条路径：冷启动全量 / 只改一个 deck 的增量 /
    删除某套 deck 的清理 / 某套编译失败必须 `exit 1`）。
+   **注意抽出来的脚本编号**：`build-4.sh` 是「编译」那步（含文件夹名护栏、stamp、
+   六条路径的判定），`build-5.sh` 是「生成导航页」那步 —— 想验编译逻辑别拿错文件
+   （拿 `build-5.sh` 测护栏会永远通过，因为它根本不看 `slides/`）。
+   另外这些脚本依赖 workflow `env:` 里的 `TYPST_VERSION` / `BUILD_DIR` / `RELEASE_TZ`，
+   手工跑时要自己补上，否则 `set -u` 会直接报 `unbound variable`。
 5. push 之后用 `gh run watch <id> --exit-status` 看结果，并用
    `gh api repos/.../actions/runs/<id>/logs`（zip 里的文件名可能不是 UTF-8，
    用 Python 的 `zipfile` 读，别用 macOS 的 `unzip`）核对：
    是否走了增量、Release 附件是否为最新。
+6. **收尾清掉临时目录**：`/tmp/wf-scripts`、`/tmp/slides-verify`（`verify-site.sh` 建的）、
+   自己造的 `/tmp/ci-t*`、`/tmp/a4-*` 之类。这些都不在仓库里，但堆着容易在下次排查时
+   误读成"当前状态"（我就踩过：拿上一次的 `/tmp/wf-scripts` 去验证新改的 workflow）。
 
 ## 7. 值得注意的坑（已踩过）
 
