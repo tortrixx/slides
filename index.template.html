@@ -5,7 +5,11 @@
     <!--
       站点首页模板。
       构建时 workflow 会替换三处占位注释（SLIDES / COUNT / META），产物是 build/index.html。
-      其中 SLIDES 是服务端渲染出来的幻灯片卡片，所以不依赖 JS；JS 只负责深浅色切换。
+      其中 SLIDES 是服务端渲染出来的幻灯片卡片，所以不依赖 JS；JS 只负责深浅色。
+      主题策略：默认跟随浏览器的 prefers-color-scheme，系统切换时页面实时跟着变；
+      用户点过右上角按钮就记进 localStorage，从此以手动选择为准（系统再变也不动）。
+      想恢复「跟随系统」清掉本站的 localStorage 即可。
+      JS 被禁用时没有 .dark，页面恒为浅色，内容与链接不受影响。
       样式沿用 tortrixx/tortrixx（Astro + shadcn + magicui）的视觉语言：
       等宽字体、中性色阶、虚线网格背景、hover 光边框、淡入、深浅色切换。
       想改样式直接改本文件的 <style>，也可以在本地打开它预览整体版式（卡片区会是空的）。
@@ -25,6 +29,8 @@
       content="tortrixx 的幻灯片集合：用 Typst + Touying 编写，推送后自动编译为 PDF。"
     />
     <meta name="twitter:card" content="summary" />
+    <!-- 地址栏/滚动条等浏览器自带界面跟随系统偏好；用户手动切过之后则由下方的 JS 改写 -->
+    <meta name="color-scheme" content="light dark" />
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#FFF" />
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#09090B" />
     <link
@@ -64,6 +70,8 @@
       html.dark {
         color-scheme: dark;
       }
+      /* 上面两条是「跟随系统/无 JS」时的兜底；用户手动切过之后，JS 会用行内
+         color-scheme（优先级更高）把它改成实际主题 */
 
       body {
         position: relative;
@@ -189,7 +197,8 @@
         height: 22px;
         width: 22px;
       }
-      /* 浅色下显示太阳（实心），深色下显示月亮 */
+      /* 浅色下只亮太阳、深色下只亮月亮（变化只由 .dark 这个类驱动，
+         所以「跟随系统」和「手动切换」走的是同一套图标状态） */
       .icon-sun {
         fill: currentColor;
       }
@@ -365,6 +374,19 @@
         border-radius: 4px;
       }
 
+      /* 只给读屏软件的提示（切换结果、无 JS 提示） */
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        margin: -1px;
+        padding: 0;
+        border: 0;
+        clip-path: inset(50%);
+        white-space: nowrap;
+        overflow: hidden;
+      }
+
       /* ---------- 页脚 ---------- */
       footer {
         margin-top: 1.25rem;
@@ -394,15 +416,46 @@
       }
     </style>
     <script>
-      // 在首次绘制前定好主题，避免闪白
+      // 首次绘制前定好主题，避免闪白。
+      // 没存过选择（含 localStorage 不可用）→ 跟随系统的 prefers-color-scheme，并在系统切换时实时跟随；
+      // 存过选择 → 以手动选择为准，不再跟随系统。
       (function () {
+        var root = document.documentElement;
+        var query = window.matchMedia("(prefers-color-scheme: dark)");
+        var saved;
         try {
-          var saved = localStorage.getItem("theme");
-          var dark = saved
-            ? saved === "dark"
-            : window.matchMedia("(prefers-color-scheme: dark)").matches;
-          document.documentElement.classList.toggle("dark", dark);
+          saved = localStorage.getItem("theme");
         } catch (e) {}
+
+        function apply(dark) {
+          root.classList.toggle("dark", dark);
+          // 同时告诉浏览器本页当前配色，表单控件/滚动条才不会反色
+          root.style.colorScheme = dark ? "dark" : "light";
+        }
+        // 按钮的无障碍状态要手动对齐：首屏这次在 DOM 就绪后补，之后每次系统切换时同步
+        function syncButton(button) {
+          if (!button) return;
+          var dark = root.classList.contains("dark");
+          button.setAttribute("aria-pressed", dark ? "true" : "false");
+          button.setAttribute("aria-label", dark ? "切换到浅色主题" : "切换到深色主题");
+          button.title = dark ? "切换到浅色主题" : "切换到深色主题";
+        }
+        function followSystem() {
+          apply(query.matches);
+          syncButton(document.getElementById("themeToggle"));
+        }
+
+        apply(saved ? saved === "dark" : query.matches);
+
+        if (!saved) {
+          // Safari 14 以前只支持已废弃的 addListener
+          if (query.addEventListener) query.addEventListener("change", followSystem);
+          else if (query.addListener) query.addListener(followSystem);
+        }
+        // 这段脚本在 <head> 里执行，此时按钮还没解析出来，等 DOM 就绪再对齐它的状态
+        document.addEventListener("DOMContentLoaded", function () {
+          syncButton(document.getElementById("themeToggle"));
+        });
       })();
     </script>
   </head>
@@ -428,7 +481,14 @@
         <h1 class="tagline">Less noise, more signal.</h1>
         <span class="spacer"></span>
         <div class="head-actions">
-          <button id="themeToggle" class="icon-btn" aria-label="切换深浅色" aria-pressed="false">
+          <button
+            id="themeToggle"
+            class="icon-btn"
+            type="button"
+            title="切换到深色主题"
+            aria-label="切换到深色主题"
+            aria-pressed="false"
+          >
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
               <path
                 class="icon-sun"
@@ -474,23 +534,33 @@
     </main>
 
     <footer class="fade" style="--i: 2">
-      Built by
-      <a href="https://typst.app" target="_blank" rel="noreferrer">Typst</a> &amp;
-      <a href="https://github.com/touying-typ/touying" target="_blank" rel="noreferrer">Touying</a>.
       本页由 GitHub Actions 自动生成 · <!--META-->
     </footer>
+    <span id="themeStatus" class="sr-only" role="status" aria-live="polite"></span>
 
     <script>
-      // 深浅色切换（记住选择）
+      // 深浅色切换：点一下就把选择固化进 localStorage，之后不再跟随系统（想恢复跟随清掉站点数据即可）
       document.getElementById("themeToggle").addEventListener("click", function () {
         var root = document.documentElement;
-        root.classList.toggle("dark");
-        var dark = root.classList.contains("dark");
+        var dark = root.classList.toggle("dark");
+        root.style.colorScheme = dark ? "dark" : "light";
+
         this.setAttribute("aria-pressed", dark ? "true" : "false");
+        var label = dark ? "切换到浅色主题" : "切换到深色主题";
+        this.setAttribute("aria-label", label);
+        this.title = label;
+
         try {
           localStorage.setItem("theme", dark ? "dark" : "light");
         } catch (e) {}
+
+        var status = document.getElementById("themeStatus");
+        if (status) status.textContent = dark ? "已切换到深色主题" : "已切换到浅色主题";
       });
     </script>
+
+    <noscript>
+      <p class="sr-only">当前浏览器未启用 JavaScript，页面固定为浅色主题。</p>
+    </noscript>
   </body>
 </html>

@@ -230,7 +230,9 @@ jobs:
           : > "$items"
           count=0
 
-          # 取 main.typ 里 config-info 的 title / subtitle（取不到就退回文件夹名）
+          # 取 main.typ 里 config-info 的 title / subtitle。
+          # title 取不到时退回文件夹名；subtitle 取不到（含 subtitle: [] 和 A4 文档）时
+          # 卡片**不渲染**那行描述，而不是塞一句默认文案 —— 少一行说明总好过一句假话。
           # 依次尝试：[..] 单独成行 → 单行里的 [..] → ".." 字符串写法。两处细节：
           #   1) 跳过注释行，否则 // title: [旧标题] 会被当成真标题；
           #   2) 单行写法要求键前面不是字母/下划线，否则 subtitle: 里的 title: 会被贪婪匹配成标题。
@@ -260,15 +262,23 @@ jobs:
             [ -n "$title" ] || title="$name"
 
             subtitle="$(pick "${dir}main.typ" subtitle)"
-            [ -n "$subtitle" ] || subtitle="点击卡片在线预览，或右键「另存为」下载"
 
             bytes="$(wc -c < "$pdf" | tr -d ' ')"
             # 1 KB 以下显示 B；不到 1 MiB 的用 KB（封顶 1023，免得 1048575 被四舍五入成 "1024 KB"）
             size="$(awk -v b="$bytes" 'BEGIN { if (b < 1024) { printf "%d B", b } else if (b < 1048576) { kb = b / 1024; if (kb > 1023) kb = 1023; printf "%.0f KB", kb } else { printf "%.1f MB", b / 1048576 } }')"
 
             title_html="$(printf '%s' "$title" | escape)"
-            subtitle_html="$(printf '%s' "$subtitle" | escape)"
             name_html="$(printf '%s' "$name" | escape)"
+
+            # 副标题为空（没写 / subtitle: [] / A4 文档）时整行都不输出。
+            # 用变量而不是「if 里再写一遍 cat <<HTML」，是为了让卡片结构在整个脚本里只有一份。
+            # 变量里只放标签本身，不带缩进也不带换行 —— 缩进和换行由模板那一行提供；
+            # 变量里若自带换行，空串时会把下一行顶下去，在卡片中间留下一行纯空格。
+            # 也注意别把变量写在行首：YAML 的块标量会因此提前结束。
+            desc_html=""
+            if [ -n "$subtitle" ]; then
+              desc_html="<div class=\"deck-desc\">$(printf '%s' "$subtitle" | escape)</div>"
+            fi
 
             # 卡片结构对应 index.template.html 里的 .deck 样式
             cat <<HTML >> "$items"
@@ -279,7 +289,7 @@ jobs:
                         ${title_html}
                         <svg class="ext" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6" /><path d="M10 14 21 3" /><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /></svg>
                       </a>
-                      <div class="deck-desc">${subtitle_html}</div>
+                      ${desc_html}
                       <div class="deck-meta">
                         <span class="badge">PDF</span>
                         <span class="badge">${size}</span>

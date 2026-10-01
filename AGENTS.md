@@ -31,8 +31,7 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
 ```
 .
 ├── slides/
-│   ├── intro/main.typ        # 完整模板：封面/目录/分节/#pause/中文/公式/pinit 标注
-│   ├── example/main.typ      # 最小模板：同样的前言，内容最少
+│   ├── template/main.typ     # 唯一的模板：前言样板 + 封面/目录/分节 + 各类写法示例
 │   └── 26-09-30/             # 实际使用的 deck（自带 src/ 图片等资源）
 │       ├── main.typ
 │       └── src/
@@ -54,7 +53,7 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
    或 `"../../shared.typ"` 都会报 `would escape the project root`（已实测），
    共享代码只能靠每份 deck 各存一份，或用 `--root` 显式指定更大的根目录。
 2. **资源用相对路径**，放在幻灯片自己的目录下：`#image("src/figure.png")`。
-3. **统一前言**（三份 deck 保持一致，改动时请同步）：
+3. **统一前言**（所有 deck 保持一致，改动时请同步；`slides/template/main.typ` 是样板）：
 
    ```typst
    #import "@preview/touying:0.8.0": *
@@ -83,8 +82,12 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
    「。、，：」不变，标点会显得特别大。
 5. 字号：正文 20pt 是 metropolis 的默认值，`#set text` 里显式写出来只为可读性。
    内容特别密的单页用局部覆盖（`#slide[#set text(size: 18pt) ...]`），不要全局改小。
-6. 主题切换：`themes.metropolis` → `themes.simple` / `themes.university` 等。
-   注意 `themes.simple` 的封面必须写 `#title-slide[标题]`，metropolis 可以直接 `#title-slide()`。
+6. 主题切换：`themes.metropolis` → `themes.university` / `dewdrop` / `stargazer` / `aqua`
+   （实测这五个可以只换开头两行、正文不动）。两个例外：
+   - `themes.simple` 的封面必须写 `#title-slide[标题]`，写 `#title-slide()` 会
+     `missing argument: body`——旧文档说的「metropolis 可以直接写」只对上面那五个成立；
+   - `themes.default` 不是主题（只导出 `slide` 等构件，没有 `*-theme` 函数），
+     `themes.article` 是 A4 文章主题（见 §3.9），都别往放映稿里套。
 7. 包版本固定：touying 0.8.0（要求 Typst ≥ 0.15.0）、numbly 0.1.0、pinit 0.2.2。
 8. **文件夹名即 URL**：允许 **字母 / 数字 / `.` / `_` / `-`** 以及**任何非 ASCII 字符**
    （汉字、假名、emoji 都行）；禁止空格和其余 ASCII 符号。编译步骤会检查，违规直接
@@ -96,7 +99,9 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
    - **标题**：首页取的是 `title:` 那行。A4 用 Typst 原生的 `#set document(title: "…")`，
      **必须是字符串**；写成 `title: [..]` 会 `error: expected string or array, found content`
      直接编译失败（实测踩过，且会连带拦住整次部署）。不写则卡片退回文件夹名。
-   - **副标题**：`subtitle:` 属于 `config-info`，A4 文档没有 → 卡片使用默认文案。
+   - **副标题**：`subtitle:` 属于 `config-info`，A4 文档没有 → 卡片的描述行整行不渲染
+     （见 §4「导航页」）；想让 A4 卡片也带一行说明，就在文档里写 `subtitle:` 是不行的，
+     只能改模板或 workflow。
    - **字体**：A4 文档没有模板前言，需自己
      `#set text(font: ((name: "Inter", covers: "latin-in-cjk"), "Noto Sans CJK SC"), size: 11pt, lang: "zh", region: "cn")`，
      否则中文用回退字体（CI 里只保证这两个字体已安装）。
@@ -107,7 +112,7 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
    `#set document(title: "…")` + `#set page(paper: "a4", margin: (x: 2.2cm, y: 2cm), numbering: "1")`
    + `#set text(font: ((name: "Inter", covers: "latin-in-cjk"), "Noto Sans CJK SC"), size: 11pt, lang: "zh", region: "cn")`
    + `#set heading(numbering: "1.")`，然后正常写 `= 一级标题` 与正文。
-   实测：1 页 / 2 页都正常列出；与 3 套 Touying deck 混排全部编译通过，只改其中一份时也只重编那一份。
+   实测：1 页 / 2 页都正常列出；与 Touying deck 混排全部编译通过，只改其中一份时也只重编那一份。
    这些注意事项**只写在本文件**，README 保持极简（见文首的文档分工规则）。
 
 ## 4. CI/CD（`.github/workflows/build-and-deploy.yml`）
@@ -157,7 +162,13 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
   - **标题/副标题**：`sed` 从各 deck 的 `config-info(...)` 里取 `title:` / `subtitle:`，依次尝试
     `[..]` 单独成行 → 单行里的 `[..]` → `".."` 字符串写法；**跳过注释行**（否则
     `// title: [旧标题]` 会中选），单行模式要求键前面不是字母/下划线（否则 `subtitle:` 里的
-    `title:` 会被贪婪匹配成标题——实测踩过）。取不到时标题退回文件夹名、副标题退回默认文案。
+    `title:` 会被贪婪匹配成标题——实测踩过）。
+    两者回退策略**不同**：`title` 取不到就退回**文件夹名**；`subtitle` 取不到（没写、
+    `subtitle: []`、或 A4 文档这种本来就没有 `config-info` 的）则**整行都不渲染**，
+    不再塞一句默认文案（旧版是一句「点击卡片在线预览…」，已移除——缺副标题的卡片宁可少一行，
+    也不要一句与内容无关的话）。注意 `subtitle: []` 也走「不渲染」，没法用它保留空行。
+    实现上 `desc_html` 变量里**只放标签、不放换行**：换行由模板那一行提供，否则空串时会把下一行
+    顶走、在卡片中间留下纯空格行；另外别把变量写在行首，YAML 的块标量会因此提前结束（已踩）。
   - **链接与文件名**：`<文件夹名>.pdf`（与 `title` 无关）；大小由 `wc -c` 换算，
     分 B / KB / MB 三档（不足 1 MiB 时封顶 1023，避免出现 "1024 KB"）。
   - **转义**：文件夹名与标题/副标题都会做 HTML 转义（`&` `<` `>` `"`），
@@ -165,12 +176,24 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
   - 标题按**原文**显示：Typst 标记（`*粗体*`、反引号）不会被渲染，也不会被剥离。
 - **首页视觉**：沿用 <https://github.com/tortrixx/tortrixx> 的设计语言（等宽字体、
   shadcn neutral 色阶、虚线网格背景、hover 光边框 BorderBeam、BlurFade 入场、
-  localStorage 记忆深浅色）。改样式只动 `index.template.html`，不用碰 workflow。
+  深浅色主题）。改样式只动 `index.template.html`，不用碰 workflow。
   注意 `<meta charset>` 必须留在文件最前面——模板开头那段中文注释一旦挪到它前面，
   就会超出 1024 字节的编码探测窗口，页面会乱码。
   装饰性动效都做了降级：光带用 `@supports (offset-path: rect(...))` 包住（不支持就整条不显示，
   否则会在左上角糊一块渐变色），`prefers-reduced-motion: reduce` 时关闭淡入并隐藏光带，
   键盘焦点用 `:focus-visible` 描边。改 CSS 时请保留这些降级。
+- **首页主题策略**：默认**跟随系统** `prefers-color-scheme`，在 `matchMedia` 的 `change`
+  事件里实时切换（同时保留 `addListener` 分支兼容老 Safari）。用户点过右上角按钮才写
+  `localStorage.theme`，此后以手动选择为准、系统再变也不动。监听器**故意不摘除**：它可重入、
+  有 `saved` 就早退，而在点击回调里 `removeEventListener` 会在回调执行到一半时把自己摘掉，
+  容易写出竞态。想恢复「跟随系统」清掉本站 localStorage 即可。
+  `:root`/`.dark` 变量与太阳/月亮图标都只由 `html.dark` 这一个类驱动，所以「跟随系统」和
+  「手动切换」走同一套状态；手动覆盖时 JS 再用行内 `color-scheme`（优先级高于样式表里
+  `html` / `html.dark` 两条兜底）让表单控件与滚动条一起变。
+  按钮的 `aria-pressed`/`aria-label`/`title` 必须跟主题一致，但 `<head>` 里那段防闪白脚本
+  执行时按钮还没解析出来 → 首屏这次对齐放在 `DOMContentLoaded`，系统主题变化时再同步一次；
+  切换结果通过 `#themeStatus`（`role="status"`）播报。无 JS 时没有 `.dark`，页面恒为浅色，
+  内容与链接不受影响。
 - **产物**：`slides-build`（普通 artifact，给 release job 下载，`retention-days: 3`）+
   `github-pages`（`actions/upload-pages-artifact@v5`，给 deploy job，自带 1 天保留期）。
   两份都只在同一次运行内使用，所以保留期压得很短，避免长期堆积；留 3 天是为了隔天
@@ -196,7 +219,7 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
 
 ```bash
 # 本地编译某套幻灯片（必须在它的目录里跑，相对路径才有效）
-cd slides/intro && typst compile main.typ && typst watch main.typ
+cd slides/template && typst compile main.typ && typst watch main.typ
 
 # 渲染某页为图片来肉眼检查
 typst compile --format png --pages 6 main.typ '/tmp/p-{p}.png'
@@ -275,6 +298,19 @@ CI 逻辑全在 YAML 的 `run: |` 里，改完不能只靠肉眼。推荐流程�
 - Release 说明里的站点链接是按「项目页」拼出来的（`<owner>.github.io/<repo>/`）。若以后
   换成自定义域名，这段（以及首页里的相对链接之外的地方）需要同步改。
 - 首页的卡片标题是**纯文本**：deck 里 `title: [*粗体*]` 会原样显示星号，不会渲染成粗体。
+- 写 Typst 内容时注意这几个和 Markdown 不一样的地方（都在模板里踩过并改对了）：
+  - 粗体是*单*星号 `*粗体*`。写 `**粗体**` 不会报错，但只会得到「两个空的强调标记」警告，
+    并原样冒出一堆星号。
+  - 多行公式里的换行必须写成**两个**反斜杠 `\\`（源码里就是两个字符）；
+    只写一个 `\`，Typst 会把数学变成普通文本，几行公式挤成一行。
+    而正文里想显示「两个反斜杠」这串字符，同样要写 `\\`。
+  - 正文里显示反引号要用双反引号包起来：` `` `反引号` `` `。
+  - `#cols` 的列数/列宽必须走具名参数：`#cols(columns: 2, ...)`、`#cols(columns: (2fr, 1fr), ...)`。
+    写成位置参数 `#cols(2, ...)` 或 `#cols((2fr, 1fr), ...)` 都会
+    `expected content, found integer/array`（`cols` 的可变参数是内容块，不是列定义）。
+- **`#pause` 不要放在一页的最后**。它把一页拆成多张子页，而*它后面的内容*直到那一页才出现；
+  放在末尾后面没有内容可藏，只会多出一张与上一页完全一样的空白子页（v0.8.0 实测）。
+  查这种问题时把每页渲染成 PNG 比对哈希，连续两页 sha1 相同即可认定是空子页。
 
 ## 8. 可能的后续改进
 
