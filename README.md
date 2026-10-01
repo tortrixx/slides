@@ -4,9 +4,3 @@
 写放映稿，GitHub Actions 负责编译成 PDF 并发布到站点。
 
 在线浏览：<https://tortrixx.github.io/slides/>
-
-```
-slides/
-├── template/   # 模板，也是写法示例
-└── 26-09-30/   # Intelligent Agents
-```
