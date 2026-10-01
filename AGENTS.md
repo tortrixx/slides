@@ -46,7 +46,7 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
 ├── index.template.html       # 站点首页模板（构建时注入幻灯片列表）
 ├── assets/
 │   └── icon.png              # 站点静态资源（左上角头像），构建时拷进 build/
-├── verify-site.sh            # CI 门禁脚本：抽 workflow 脚本 + 语法/lint + 真跑六条编译路径
+├── verify-site.sh            # CI 门禁脚本：抽 workflow 脚本 + 语法/lint + 真跑七条路径 + Release/tag 逻辑
 ├── AGENTS.md                 # 本文件
 ├── README.md                 # 6 行：定位一句话 + 在线地址，不放任何清单/操作
 └── .gitignore                # 忽略 build/ 与本地编译出的 slides/*.main.pdf
@@ -107,6 +107,9 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
 8. **文件夹名即 URL**：允许 **字母 / 数字 / `.` / `_` / `-`** 以及**任何非 ASCII 字符**
    （汉字、假名、emoji 都行）；禁止空格和其余 ASCII 符号。编译步骤会检查，违规直接
    `::error::` 并退出（否则会做出坏链接、坏 HTML、坏 Markdown）。改名等于换 URL，旧链接会 404。
+   另外两条**不靠字符集**的护栏：**以 `.` 开头的目录会直接报错**（`slides/*/` 通配不到它，
+   否则会静默少一套），**含换行/回车的目录名也直接报错**（`basename` 会吃掉换行，两个目录会
+   落到同一个 PDF 名上互相覆盖）。
 
 9. **非 Touying / A4 文档**：流水线不关心内容形态 —— A4 讲义、读书笔记、论文式文档都能和放映稿
    共存。硬性要求只有三条：`slides/<名称>/main.typ` 存在、能用
@@ -151,7 +154,7 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
 
 | job | 条件 | 权限 | 作用 |
 | --- | --- | --- | --- |
-| `verify` | `github.event.deleted != true` | 默认（`contents: read`） | 门禁：跑 `verify-site.sh --build`（六条路径），失败则后面全部不执行 |
+| `verify` | `github.event.deleted != true` | 默认（`contents: read`） | 门禁：跑 `verify-site.sh --build`（七条路径 + Release/tag 逻辑），失败则后面全部不执行 |
 | `build` | `github.event.deleted != true` | `contents: read` | 装字体 → 增量编译 → 生成导航页 → 上传两份产物 |
 | `deploy` | `refs/heads/main` 的 push 或手动 | `pages: write`, `id-token: write` | `actions/deploy-pages` 发布 `build/` |
 | `release` | main push / 推送 tag / release 事件 | `contents: write` | 计算 tag → 写说明 → 建/更新 Release |
@@ -159,11 +162,25 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
 `deploy` 用固定的 `pages` concurrency group；`release` 用 `release-<tag>`（main push 时即
 `release-main`）串行化，避免同一天两个 push 并发改同一个 Release。
 
+**`build` 另有一个 `slides-build-${ref}` + `cancel-in-progress: true` 的 concurrency**：同一个 ref
+来了新 push 就取消还在跑的旧 build。为什么需要它：两个 concurrency group 只保证「不并发」，
+不保证「顺序」—— 若两次 push 挨得很近、且**先推的那次 build 更慢**（冷缓存/全量），它会晚于
+新运行才进入 `pages` / `release-main` 组，把站点与当天 Release 刷回旧提交。取消掉被取代的 build
+之后，它的 `deploy`/`release` 因 `needs` 未满足而根本不跑；被取消的运行也不会保存缓存
+（`actions/cache` 是 `post-if: success()`），所以不污染缓存。
+
 四个 job 都显式写了 `timeout-minutes`（verify 10 / build 20 / deploy 10 / release 10）：
 不写的话默认上限是 **6 小时**，卡住的 job 会一直占着 runner，`deploy`/`release` 还会一直占着
-自己的 concurrency 名额，把后续运行排队卡死。另外两个 `checkout` 都带
+自己的 concurrency 名额，把后续运行排队卡死（实测现有量级只用 9–37 s，余量 15× 以上；
+套数涨到约 90 套时才需要抬 verify 的上限）。另外两个 `checkout` 都带
 `persist-credentials: false` —— 没有任何步骤需要推送，不留 token 在 `.git/config` 里
 （编译步骤用的 `git hash-object / diff / cat-file` 全是本地操作，不需要凭据）。
+
+`runs-on` 全部**钉在 `ubuntu-24.04`**（不是 `ubuntu-latest`）：镜像迁移会让 apt 字体包版本变化、
+进而改变 PDF 排版，而 workflow 文件哈希不会因此变化 —— 那就会「部分 deck 用旧镜像的字体、
+部分用新镜像」，且不会触发全量重编。钉住后想换镜像是显式动作（同时记得删
+`slides-build-main-*` 缓存强制全量）。
+
 
 ### build 细节
 
@@ -187,6 +204,18 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
   所以 `.build-stamp` 不会出现在站点上，也不会进 Release 附件（release 那边另有
   `files: build/*.pdf` 兜底）。**别把它改成非隐藏文件名**，否则会被发布出去。
   tag / release / 手动运行一律全量编译。
+- **构建环境校验（写文件之前第一步）**：`BUILD_DIR` 归一化（折叠 `//`、去掉开头 `./` 与结尾 `/`）后
+  必须是仓库内的相对目录名，且只含 `A-Za-z0-9._-/`；`TYPST_VERSION` 不能为空；`RELEASE_TZ` 必须能被
+  `date` 解析。为什么非要这一步：后面几段脚本按 `"$BUILD_DIR"/*` 遍历并 `rm -rf`，**`BUILD_DIR` 为空时
+  通配符会展开成 `/*`**（实测会枚举 `/Applications`、`/Library`…），而 `'./'` 又等价于 `.`
+  —— 清理会把整个工作树删掉。空值/`/`/`.`/`..`/绝对路径/含 `..`/含空格等一律 `::error::` + `exit 1`。
+  这一步刻意放在装字体、恢复缓存**之前**（配错了 5 秒内就红，也不会先恢复一份缓存再失败）。
+- **幻灯片目录名的另外两个护栏**（§3.8 只管字符集）：
+  - **点号开头**（`slides/.hidden`）：`for dir in slides/*/` 根本匹配不到它，会静默不编译、不出卡片，
+    而只要还有别的 deck 就 `exit 0` —— 站点永远少一套。所以单独扫 `slides/.[!.]*/`、`slides/..?*/`
+    报错（宁可让人改名）。
+  - **含换行/回车**：`basename` 会把尾部换行吃掉，两个不同目录会落到同一个 `<名称>.pdf` 上互相覆盖。
+    按 `$dir` 的原始字节先拦掉。
 - **导航页**：`index.template.html` 是首页模板（版式/样式都在里面），workflow 只负责
   注入数据，产物 `build/index.html` 是**服务端渲染**的静态页（无 JS 也能看）。
   三处占位注释由 `awk` 替换：`SLIDES`（卡片列表）、`COUNT`（套数）、`META`（页脚的「最后更新 …」）。
@@ -213,7 +242,8 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
     取最大值；Typst 产出的 PDF 未压缩所以读得到，已核对 49/20 与逐页渲染数一致）。
     **原来看起来多余的 `PDF` 徽章已去掉**——链接本身就是 `.pdf`、点了就是打开 PDF，
     文件名里又写了一遍，三处重复；换成页数更有信息量。若哪天读不到 `/Count`（例如 PDF 开始
-    压缩），那一枚会渲染成空胶囊而不是错误数字，所以这个取法不会给出错的信息。
+    压缩），**那一枚整枚都不渲染**（不是渲染一个只有「页」字的空胶囊），所以这个取法不会给出错的信息。
+    门禁同时钉了两面：读不到时不许出现「N 页」，正常 PDF 必须出现「N 页」。
   - **转义**：文件夹名与标题/副标题都会做 HTML 转义（`&` `<` `>` `"`），
     文件夹名另有字符集护栏（见 §3.8），两道一起保证生成的 HTML 不会被名字搞坏。
   - 标题按**原文**显示：Typst 标记（`*粗体*`、反引号）不会被渲染，也不会被剥离。
@@ -221,10 +251,11 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
   那步开头拷进站点根目录（现在只有 `assets/icon.png`，即左上角头像；模板里写 `src="icon.png"`）。
   文件缺失是 `::error::` + 退出，**故意 fail closed**：页面不会因此报错，只是 `img` 被
   `onerror` 静默删掉，不失败的话很难发现。`verify-site.sh` 里钉了一条产物断言。
-  拷之前先清掉 `build/` 里「非 `*.pdf`、非 `index.html`」的旧文件（点号开头的 `.build-stamp`
-  不匹配 `"$BUILD_DIR"/*`，会保留）：`build/` 是 `actions/cache` 的缓存对象，只清 PDF 的话，
-  某个版本拷进来、后来不再拷的静态资源会被缓存**永久**带下去，并随两份 artifact 一起发布到
-  站点根目录，自愈不了（本地 `build/` 里就躺过 `avatar-*.png` 这种中间态残留）。
+  拷之前先清掉 `build/` 里「非 `*.pdf`、非 `index.html`、非 `.build-stamp`」的旧文件
+  （三个通配符 `*` / `.[!.]*` / `..?*` 一起覆盖普通文件与隐藏文件；`.build-stamp` 是增量基准，
+  必须留下）：`build/` 是 `actions/cache` 的缓存对象，只清 PDF 的话，某个版本拷进来、后来不再拷的
+  静态资源会被缓存**永久**带下去，并随两份 artifact 一起发布到站点根目录，自愈不了
+  （本地 `build/` 里就躺过 `avatar-*.png` 这种中间态残留）。
   头像原来写的是 `https://github.com/tortrixx.png`，为什么换掉（2026-10 实测）：
   - 那是**全页唯一的跨站请求**（其余 CSS/JS/图标全是内联的），所以必然最后出现；
   - 它会 **302** 到 `avatars.githubusercontent.com`，多一次 DNS + TLS，实测 1.84s 才拿到图；
@@ -342,18 +373,33 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
 
 - tag 规则（「计算 tag」步骤的 else 分支）：
   `tag="v$(TZ="${RELEASE_TZ}" date +%Y.%m.%d)"`，`RELEASE_TZ` 默认 `Asia/Shanghai`。
-- `managed=true` 表示这是工作流按天维护的 Release → **每次都刷新说明与附件**；
-  `managed=false`（手动 tag / release 事件）→ 只在 `exists=false` 时写说明，
-  已存在时**只覆盖附件、绝不传 body**，以免覆盖用户手写的说明。
-- `exists` 用 `gh release view <tag>` 探测，但**只有明确报 `not found` / `HTTP 404` 才判 false**：
-  403 限流 / 5xx / 网络错误一律 `::error::` 退出。把「查不到」当成「不存在」，会让一个已存在的
-  版本化 Release 走「新建」分支并带上自动说明 —— 直接覆盖掉用户手写的说明。
+- **说明「是不是我们写的」由 body 里的机器标记决定，不再只看 managed**：自动生成的说明末尾有一行
+  `<!-- ci-managed -->`（渲染后不可见）。`gh release view --json body` 读回来带这个标记 → `ours=true`，
+  才允许重写说明；没标记（用户手写、或旧版工作流建的）→ **只覆盖同名附件，一个字都不动**。
+  三条步骤条件是完整划分：`exists=false || ours=true` → 生成说明 + 发布（带 body）；
+  `exists=true && ours!=true` → 只更新附件。为什么这么改：原来的条件是「managed=true 就刷说明」，
+  而 managed 只看「这次是不是 main push」—— 用户手动建/手改了当天日期 Release 的说明后，
+  同一天再 push 就会把他的手写说明整段盖掉（不可恢复）。
+  **一次性副作用**：改造前建的 Release body 里没有标记，所以它们不会再有说明刷新（附件照常更新）；
+  跨天新建的 Release 就正常了。
+- `exists` / `ours` 用 `gh release view <tag> --json body` 一次拿到，但**只有明确报
+  `not found` / `HTTP 404` 才判 false**：403 限流 / 5xx / 网络错误先按瞬时故障退避重试
+  （默认 3 次、5 秒起，可用 `RELEASE_VIEW_RETRIES` / `RELEASE_VIEW_BACKOFF` 调；门禁里设 2/0 保持秒级），
+  重试仍失败才 `::error::` 退出。把「查不到」当成「不存在」，会让已存在的 Release 被当成新建、
+  连带覆盖说明。旋钮值非法时回退默认值 —— 曾经的 `for x in $(seq 1 "$retries")` 在 GNU 下遇到
+  非数字会「循环零次」，静默退化成 `exists=false`（本机 BSD 反而跑一次，行为还分叉）。
 - Release 说明里的 tag 片段用 `python3 -c 'urllib.parse.quote(...)'` 整体做百分号编码：
   手写 tag 里可能出现 `(` `)` `#` `%` 等字符，只转义括号会让 Markdown 链接被截断。
 - **已知行为（不是 bug，但改前要想清楚）**：`overwrite_files: true` 只覆盖**同名**附件、不做
   prune —— 同一天里删掉或改名某套 deck 后再 push，旧 PDF 仍留在当天 Release 上，
-  `releases/latest/download/<旧名>.pdf` 会继续返回旧内容，直到跨天新建 Release 才换掉链接。
+  `releases/latest/download/<旧名>.pdf` 会继续返回旧内容，直到跨天新建 Release 才换掉链接
+  （线上实证：v2026.09.30 仍带着 `example.pdf`，下载链接 302、站点链接 404）。
   想清理就得显式删附件，但那会连手动附加的文件一起误删，所以这里选择只记录不自动做。
+- **`deploy` 与 `release` 是兄弟 job，可以单边成功**：Pages 侧失败（Source 没选 Actions、Pages 5xx）
+  而 Release 照发，或反过来 —— 站点与 Release 会短暂不一致，补救手段是「Re-run failed jobs」，
+  而它受产物保留期限制（pages 1 天 / slides-build 3 天）。另外**说明里的站点链接对「新 deck」在部署
+  完成前是 404**（附件下载链接正常）。这是有意接受的取舍：宁可让 PDF 先可下载，也不因为 Pages
+  出问题就把发版一起卡住。`needs.deploy` 串联会改变这个取舍，所以没那么做。
 - 发布用 `softprops/action-gh-release@v3` + `overwrite_files: true`（同一天重复 push 靠它覆盖）。
 - **tag 一旦创建就不再移动**：同一天的附件会更新，但 tag 停在当天第一次 push 的提交。
   移动已存在的 tag 会让所有克隆的 `git fetch --tags` 报 `would clobber existing tag`。
@@ -389,8 +435,8 @@ typst compile --format png --pages 6 main.typ '/tmp/p-{p}.png'
 # 本地 Typst 版本应与 workflow 的 TYPST_VERSION 一致（当前 0.15.1）
 
 # 本地跑门禁（CI 里也是同一条命令；改完 workflow 务必先本地过一遍）
-bash verify-site.sh --build    # 静态检查 + 六条编译路径（23 项）
-bash verify-site.sh            # 只做静态部分，几秒（不真编译）
+bash verify-site.sh            # 只做静态部分（24 项，含 Release/tag 逻辑，几秒）
+bash verify-site.sh --build    # 再加七条编译路径（共 76 项），和 CI 门禁完全同一条命令
 
 # 查看线上状态
 gh run list --repo tortrixx/slides
@@ -421,40 +467,70 @@ CI 逻辑全在 YAML 的 `run: |` 里，改完不能只靠肉眼。**`verify-sit
 （`verify` job 跑 `--build`），本地可以先跑一遍再推：
 
 ```bash
-bash verify-site.sh            # 静态检查：抽脚本 + bash -n + 多字节 lint（几秒）
-bash verify-site.sh --build    # 再六条编译路径，和 CI 门禁完全同一条命令
+bash verify-site.sh            # 静态检查 + Release/tag 逻辑（24 项，几秒，不需要 typst）
+bash verify-site.sh --build    # 再加七条编译路径（共 76 项），和 CI 门禁完全同一条命令
 ```
 
-当前基线：`--build` 全绿 = 23 项通过，覆盖六条路径：
-① 冷启动全量（含 `assets/icon.png` 确实进了 `build/`）② 只改一个 deck 的增量
+当前基线：`--build` 全绿 = **76 项通过**（静态 24 + 编译路径 52），覆盖这些路径：
+① 冷启动全量（含 `assets/icon.png` 确实进了 `build/`，以及 COUNT/META 两个占位符**真的注入了**）
+①b **HTML 转义**：造一个标题含 `& < >` 的 deck，断言产物里是实体且没有原始标签（转义回归是注入风险）
+② 只改一个 deck 的增量
 ②b **非 ASCII 文件夹名**的增量必须重编那一套（钉住 `core.quotePath=false`，见 §7）
-③ 删除某套后清理残留 PDF ④ 某套编译失败必须 `exit 1` ⑤ 文件夹名非法必须 `exit 1`
-⑥ 一套都没有必须 `exit 1`。
+③ 删除某套后清理残留 PDF ④ 某套编译失败必须 `exit 1`
+⑤ 文件夹名非法必须 `exit 1`（空格）；⑤b **点号开头**的目录必须被拒；⑤c **含换行**的目录名必须被拒
+⑥ 一套都没有必须 `exit 1`
+⑦ 导航页边界：读不到 `/Count` 时**不渲染页数胶囊**（能读到时要渲染出「N 页」）、残留（含隐藏）
+文件被清掉而 `.build-stamp` 保留、`BUILD_DIR` 的危险取值（空/`/`/`..`/`./`/`.//`/绝对路径/含 `..`/
+含空格）必须被拒而 `build`、`slides/build` 必须放行
+⑧ Release/tag 逻辑（stub 掉 `gh`）：三种入口算出的 tag/managed、not found→`exists=false`、
+403→重试后 fail closed、`RELEASE_VIEW_RETRIES=abc` 不许静默降级、机器标记决定 `ours`、
+说明里的 tag 被整体百分号编码、说明末尾带标记
+⑨ 事件维度（用两套 1 页 A4 的极小夹具）：main push + stamp 匹配 → 增量；TYPST_VERSION 失配 /
+workflow_dispatch / 非 main push → 全量重编。
 
-**为什么这个门禁值得存在**：这六条守的都是**静默失效**的不变量 —— stamp 基准错了会
-长期复用旧 PDF、护栏失效会做出坏链接、失败没 `exit 1` 会发布残缺站点。它们破了不报错，
-只是安静地出错，所以必须靠真跑一遍来守。反过来，`bash -n` 那类静态检查当门禁是**零增量**
-（语法错 GitHub 起不来 job、运行时也立刻炸），所以门禁的价值全在 `--build` 那部分。
+**为什么这个门禁值得存在**：这些守的都是**静默失效**的不变量 —— stamp 基准错了会长期复用
+旧 PDF、`core.quotePath` 会让中文名 deck 永不重编、护栏失效会做出坏链接、失败没 `exit 1`
+会发布残缺站点、说明判断错了会覆盖用户手写内容。它们破了不报错，只是安静地出错，
+所以必须靠真跑一遍来守。反过来，`bash -n` 那类静态检查当门禁是**零增量**（语法错 GitHub
+起不来 job、运行时也立刻炸），所以门禁的价值全在真跑那部分 —— 但也别把静态部分写成假绿
+（见下面 `bash -n` 那条）。
 
 **门禁脚本自身的鲁棒性约定（`verify-site.sh`）**：
 - **不写死 workflow 的 `env:` 值**，改成从 YAML 读 `TYPST_VERSION` / `BUILD_DIR` / `RELEASE_TZ`。
   写死过 `TYPST_VERSION`，后果实测很严重：workflow 一升级版本号，脚本造的 stamp 里的版本就和
   真正会写的那份不一致 → 走进「编译环境变了 → 全量」分支 → ②③ 的增量断言全挂。
   实测对比（把 workflow 的版本改成 9.9.9）：**写死版 2 通过 / 17 失败（exit 127）**，
-  读 env 版 **19 通过 / 0 失败**（当时还没加 env 断言，现在是 23 项）。这类假红比漏报更糟 —— 它会诱使人把测试改松。
-- **用 `trap 'rm -rf "$TMP"' EXIT INT TERM` 清理临时目录**：失败路径最容易留垃圾，
-  而留下的 `/tmp/slides-verify` 会在下次排查时被误读成"当前状态"（真踩过）。
+  读 env 版 **19 通过 / 0 失败**（当时还没加 env 断言，现在是 76 项）。这类假红比漏报更糟 —— 它会诱使人把测试改松。
+- **typst 包缓存要显式指到临时目录**：脚本默认 `TYPST_PACKAGE_CACHE_PATH="$TMP/typst-pkg"`
+  （外部设了就尊重外部值）。typst 默认写 `$HOME`，HOME 不可写时每套 deck 都会报
+  `failed to create temporary package directory` —— 看起来像 deck 坏了，是典型假红
+  （本机沙箱就踩过：不设这个变量 12 通过 / 11 失败，设了才 76/0）。CI 里 HOME 可写、
+  本来也没缓存这个目录，所以行为不变。
+- **夹具先做一次快照提交**：`fresh()` 复制完仓库会 `git add -A && commit` 一次。原因是工作树里
+  未提交的改动（比如刚 `cp -R` 出来的新 deck）不在 `git diff <基准> HEAD` 里，会让 ② 的
+  「复用 N-1」断言假红 —— 本地开发时几乎必然命中。
+- **每次运行用独立临时目录**（`TMP="$(mktemp -d …)"` + `trap` 清理），不再写死 `/tmp/slides-verify`：
+  写死时两个并发运行（本地跑一遍的同时另一个 agent 也在跑、或 CI 与本地同时跑）会互相
+  `rm -rf` 掉对方的 `$TMP`，症状是后面莫名其妙的 `exit 127`、断言乱飞 —— 本轮真踩过，
+  而且当时误以为是代码坏了。trap 仍负责清理。
 - **期望套数从夹具推导，不写死**：`n_decks` 由 `$R/slides/*/main.typ` 数出来，①③ 的数量断言
   和 ② 的复用套数都用它。写死过 `2`／`1`，而 §1 承诺「`cp -R slides/template slides/my-talk`
   后 push 即可」—— 加第三套 slide 的那次 push 会让门禁假红，进而 `needs: verify` 把部署和发版
   全卡死（正是 §6 警告的「假红诱使人把测试改松」）。
-- **抽出来的步骤脚本按内容签名校验，不认死编号**：`build-4.sh` / `build-5.sh` 是按 steps 下标
-  抽的，workflow 插一步就错位，而错位最坏的结果是**静默测错步骤**（拿生成导航页的脚本验护栏会
-  永远通过）。所以先确认前者含 `typst compile`、后者含 `<!--SLIDES-->`，不对就立刻 exit 1。
-- **另有一条只在 CI 存在的差异（已知，未修）**：CI 的 `run:` 由 runner 以带 `-e` 的 shell 启动，
-  而门禁用 `bash <脚本>`（不继承 `-e`）。所以 `build-4.sh` 里若有「失败又没被 `|| true`/`if` 包住」
-  的命令，CI 会立刻中止、门禁却会继续跑 —— 门禁可能给一次注定红的 push 开绿灯（不会发坏内容，
-  只是白跑一次 CI）。目前代码里没有这种命令；新增命令时留意。
+- **要跑的步骤脚本按内容签名定位，不认文件名里的下标**：抽取出来的文件叫 `build-<下标>.sh`，
+  workflow 插一步就整体错位，而错位最坏的结果是**静默测错步骤**（拿生成导航页的脚本验护栏会
+  永远通过）。现在直接扫 `$TMP/scripts/*.sh`，按内容挑：含 `typst compile` 的是编译步、
+  含 `<!--SLIDES-->` 的是导航页、含 `managed=true` 的是计算 tag、含 `release-notes.md` 的是写说明；
+  一个都找不到就立刻 `bad` + `exit 1`。加/删步骤不需要改门禁。
+- **`bash -n` 必须逐个文件跑**：`bash -n f1 f2 f3` 只把**第一个**当脚本、其余当位置参数，
+  第二个文件语法坏了它照样报「全部通过」（本轮对抗复核实测）。现在是循环 + 计数。
+- **抓预期失败的退出码用 `capture`（`if out=$(…); then rc=0; else rc=$?; fi`）**，不要写
+  `out="$(…)"; rc=$?`：门禁若被外人用 `bash -e verify-site.sh` 跑，后者会在第一个期望非零的
+  断言处直接退出、连 FAIL 和汇总都印不出来。
+- **CI 与本地仍有一个已知差异**：CI 的 `run:` 由 runner 以带 `-e` 的 shell 启动，而门禁用
+  `bash <脚本>`（不继承 `-e`）。所以脚本里任何「失败又没被 `|| true`/`if`/`case` 包住」的命令，
+  CI 会立刻中止而门禁会继续 —— 这类命令要当成「必须有兜底」来写（`wf_rev` 那处就是这么踩的：
+  `2>/dev/null` 本意是容忍失败，实际在 CI 上会静默中止整步）。
 - 顺带：脚本里 `git commit` 用 `git -c user.email=… -c user.name=…`，不依赖 runner 上有
   git 身份配置（那是环境相关的，不该假设）。
 
@@ -481,8 +557,9 @@ bash verify-site.sh --build    # 再六条编译路径，和 CI 门禁完全同�
      .github/workflows/build-and-deploy.yml /tmp/wf-scripts
    ```
 
-2. **语法与引号检查**：`bash -n /tmp/wf-scripts/*.sh`。
-   本机是 bash 3.2（比 runner 的 bash 5 严格），能提前暴露问题。
+2. **语法与引号检查**：逐个文件 `for f in /tmp/wf-scripts/*.sh; do bash -n "$f" || echo "坏: $f"; done`。
+   **别写 `bash -n /tmp/wf-scripts/*.sh`** —— 它只把第一个当脚本、其余当位置参数，第二个文件语法
+   坏了也照样「通过」（本轮实测）。本机是 bash 3.2（比 runner 的 bash 5 严格），能提前暴露问题。
 3. **多字节陷阱 lint**：`$var` 紧跟中文字符时 bash 3.2 会把首个字节吞进变量名，
    必须写成 `${var}`：
 
@@ -495,18 +572,20 @@ bash verify-site.sh --build    # 再六条编译路径，和 CI 门禁完全同�
 
 4. **在临时副本里跑编译步骤**（覆盖四条路径：冷启动全量 / 只改一个 deck 的增量 /
    删除某套 deck 的清理 / 某套编译失败必须 `exit 1`）。
-   **注意抽出来的脚本编号**：`build-4.sh` 是「编译」那步（含文件夹名护栏、stamp、
-   六条路径的判定），`build-5.sh` 是「生成导航页」那步 —— 想验编译逻辑别拿错文件
-   （拿 `build-5.sh` 测护栏会永远通过，因为它根本不看 `slides/`）。
+   **按内容挑脚本，别认编号**：文件名叫 `build-<下标>.sh`，插一步就整体错位（错位后可能
+   「静默测错步骤」）。用 `grep -l 'typst compile'` 找编译步、`grep -l '<!--SLIDES-->'` 找导航页、
+   `grep -l 'managed=true'` 找计算 tag、`grep -l 'release-notes.md'` 找写说明（`verify-site.sh`
+   就是这么做的）。
    另外这些脚本依赖 workflow `env:` 里的 `TYPST_VERSION` / `BUILD_DIR` / `RELEASE_TZ`，
    手工跑时要自己补上，否则 `set -u` 会直接报 `unbound variable`。
 5. push 之后用 `gh run watch <id> --exit-status` 看结果，并用
    `gh api repos/.../actions/runs/<id>/logs`（zip 里的文件名可能不是 UTF-8，
    用 Python 的 `zipfile` 读，别用 macOS 的 `unzip`）核对：
    是否走了增量、Release 附件是否为最新。
-6. **收尾清掉临时目录**：`/tmp/wf-scripts`、`/tmp/slides-verify`（`verify-site.sh` 建的）、
-   自己造的 `/tmp/ci-t*`、`/tmp/a4-*` 之类。这些都不在仓库里，但堆着容易在下次排查时
-   误读成"当前状态"（我就踩过：拿上一次的 `/tmp/wf-scripts` 去验证新改的 workflow）。
+6. **收尾清掉临时目录**：`/tmp/wf-scripts`、`/tmp/slides-verify.*`（`verify-site.sh` 每次用
+   `mktemp -d` 建、trap 会删，异常退出时才可能剩下）、自己造的 `/tmp/ci-t*`、`/tmp/a4-*` 之类。
+   这些都不在仓库里，但堆着容易在下次排查时误读成"当前状态"（我就踩过：拿上一次的
+   `/tmp/wf-scripts` 去验证新改的 workflow）。
 
 ## 7. 值得注意的坑（已踩过）
 
@@ -519,8 +598,22 @@ bash verify-site.sh --build    # 再六条编译路径，和 CI 门禁完全同�
 - **`set -euo pipefail` 下，命令替换里的管道失败会终止整个步骤**：生成导航页那步读 `/Count` 的
   `pages="$(… | grep -o … | tail -1)"` 在「读不到」时 grep 返回 1 → 整步退出，与注释里承诺的
   「渲染成空胶囊」正好相反（部署会被整个跳过）。已补 `|| true`。同一步里新增命令替换时留意。
-- `setup-typst` 的 `cache-dependency-path` **只接受单个可编译的 `.typ` 文件**，
-  不支持通配符；cache miss 时它会 `typst compile` 这个文件来拉包。
+- **`printf … | grep -q` 在 `pipefail` 下会把「匹配成功」变成「失败」**（2026-10 实测，严重）：
+  `grep -q` 命中即退出，若左侧数据超过管道缓冲（Linux 64 KiB，约上千条路径），printf 撞 EPIPE
+  返回 141，`set -o pipefail` 让整条管道算失败 —— 于是 `if ! printf … | grep -qF …` 里的 `!`
+  把「有改动」翻成「没改动」，**静默复用旧 PDF**。判断「这个 deck 改没改」的地方已改成
+  here-string（`grep -qF -- "$dir" <<<"$changed"`），没有管道就没有 SIGPIPE。
+  凡是「可能很大的数据 | grep -q」都要这样写。
+- **`slides/*/` 通配不到点号开头的目录**：`slides/.hidden/main.typ` 会被完全无视（不编译、不出卡片），
+  而只要还有别的 deck 就 `exit 0` —— 站点永远少一套且没有任何报错。已加显式护栏报错。
+- **`basename` 会吃掉结尾换行**：目录名 `nl\n` 与 `nl` 会落到同一个 `nl.pdf` 上互相覆盖。已按
+  原始字节拦掉含换行/回车的目录名。
+- **`BUILD_DIR` 为空/`./` 时的通配符会指向文件系统顶层**：`"$BUILD_DIR"/*` 空值展开成 `/*`、
+  `'./'` 等价于 `.`（都实测过），而清理循环里有 `rm -rf`。已加「校验构建环境变量」步骤
+  归一化后 fail closed。
+- **CI 的 run 块带 `-e`，本地门禁不带**：`wf_rev="$(git hash-object … 2>/dev/null | cut …)"` 这种
+  「本意容忍失败」的写法，在 CI 上会**静默中止整步**（rc=128、一行日志都没有），而本地门禁里
+  它会正常降级成全量编译 —— 两边行为不同，所以必须显式写 `|| wf_rev=""`。
 - **`actions/cache` 的 `if:` 是无效的**（实测）：官方文档写明「cache action 不支持 `if:`，
   条件会被忽略」。本仓库 `恢复上次的编译产物` 那步挂着
   `if: github.event_name == 'push' && github.ref == 'refs/heads/main'`，但查运行日志，

@@ -6,10 +6,11 @@
 #   slides/<名称>/main.typ  →  https://<用户名>.github.io/<仓库名>/<名称>.pdf
 #   首页（自动生成的导航页）→  https://<用户名>.github.io/<仓库名>/
 #
-# 三个 job 各司其职，权限互不重叠：
-#   build   → 装字体 + 编译 PDF（增量）+ 生成导航页 + 上传产物   （contents: read）
-#   deploy  → 把 build/ 目录发布到 GitHub Pages                 （pages/id-token: write）
-#   release → 按日期发版并创建 Release，附上全部 PDF             （contents: write）
+# 四个 job 各司其职，权限互不重叠：
+#   verify  → 门禁：跑 verify-site.sh --build（七条路径）            （contents: read）
+#   build   → 装字体 + 编译 PDF（增量）+ 生成导航页 + 上传产物       （contents: read）
+#   deploy  → 把 build/ 目录发布到 GitHub Pages                     （pages/id-token: write）
+#   release → 按日期发版并创建 Release，附上全部 PDF                 （contents: write）
 #
 # 你不需要手动打 tag：每次推送到 main 且构建成功后，release job 会用
 # 当天日期（默认 Asia/Shanghai，见 RELEASE_TZ）创建/更新 Release，例如 v2026.09.30。
@@ -48,7 +49,7 @@ jobs:
   #
   # 为什么值得单开一个 job 而不是塞进 build：这段 CI 逻辑里有几个**静默失效**的不变量
   # ——stamp 基准、文件夹名护栏、编译失败必须 exit 1、删了 deck 要清残留。它们破了不会
-  # 报错，只会安静地发布残缺内容或复用旧 PDF。verify-site.sh --build 真跑六条路径来守它们。
+  # 报错，只会安静地发布残缺内容或复用旧 PDF。verify-site.sh --build 真跑七条路径来守它们。
   #
   # 为什么不塞进 build 的步骤里：build 最后会写 .build-stamp。若「编译 → 写 stamp →
   # 门禁失败」这个顺序成立，stamp 已经落盘，下次 push 会以为编译过了而跳过重编 ——
@@ -60,9 +61,9 @@ jobs:
   # ---------------------------------------------------------------------------
   verify:
     name: 校验 CI 逻辑（门禁）
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: github.event.deleted != true
-    # 这个 job 会自己编译 5 次（六条路径里的五条），给个上限免得异常时一直挂着
+    # 这个 job 会自己编译 6 次以上（七条路径里的多数），给个上限免得异常时一直挂着
     timeout-minutes: 10
     steps:
       - name: 检出仓库
@@ -94,12 +95,19 @@ jobs:
   build:
     name: 编译幻灯片
     needs: verify
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 删除 tag / 分支同样会产生 push 事件（deleted: true）。必须忽略，
     # 否则删掉 v2026.09.30 之后工作流会认为「该版本不存在」而把它重新创建出来。
     if: github.event.deleted != true
     # 上限：装字体 + 全量编译（最坏情况：缓存没了 + deck 变多）。不设上限时卡住的 job 会占满默认 6 小时
     timeout-minutes: 20
+    # 同一个 ref 来了新 push 就取消还在跑的旧 build：否则「较旧那次更慢」时，它会晚于新运行
+    # 进入 pages / release-main 组，把站点与当天 Release 刷回旧提交（乱序覆盖，concurrency 只防
+    # 并发不防乱序）。取消旧 build 后它的 deploy/release 因 needs 未满足而根本不跑；
+    # 被取消的运行不会保存缓存（actions/cache 是 post-if: success()），所以也不会污染缓存。
+    concurrency:
+      group: slides-build-${{ github.ref }}
+      cancel-in-progress: true
     steps:
       - name: 检出仓库
         uses: actions/checkout@v7
@@ -112,6 +120,36 @@ jobs:
           fetch-depth: 0
           # 编译步骤只用本地 git 命令（hash-object / diff / cat-file），不需要凭据
           persist-credentials: false
+
+      # 在动任何文件之前先把 env 校验一遍（所以放在装字体、恢复缓存之前 —— 配错了 5 秒内就红，
+      # 也不会先恢复一份缓存再失败）。为什么必须校验：后面的脚本会按 "$BUILD_DIR"/* 遍历、
+      # 清理、写入文件，而 **BUILD_DIR 为空时 `"$BUILD_DIR"/*` 会展开成 `/*`**，
+      # `'./'` 又等价于 `.`（实测：清理会把整个工作树 rm -rf 掉）。这里 fail closed。
+      - name: 校验构建环境变量
+        run: |
+          set -euo pipefail
+
+          # 先归一化再判：折叠重复斜杠、去掉开头的 ./ 与结尾的 /，
+          # 否则 BUILD_DIR='./' / './/' / 'build/../' 这类写法会绕过 `""| / | . | ..` 的检查。
+          raw="${BUILD_DIR:-}"
+          norm="$(printf '%s' "$raw" | sed -e 's#//*#/#g' -e 's#^\./##' -e 's#/$##')"
+          case "$norm" in
+            ""|/|.|..|/*|*..*)
+              echo "::error::BUILD_DIR 非法（'${raw}'）：必须是仓库内的相对目录名"; exit 1 ;;
+            *[!A-Za-z0-9._/-]*)
+              echo "::error::BUILD_DIR 非法（'${raw}'）：只允许字母/数字/点/下划线/连字符/斜杠"; exit 1 ;;
+          esac
+          [ -n "${TYPST_VERSION:-}" ] || { echo "::error::TYPST_VERSION 为空，无法判断编译环境是否变化"; exit 1; }
+          # RELEASE_TZ 只在 release job 用，但配错了会让 tag 的日期悄悄跑偏（`TZ=Not/AZone date`
+          # 在 glibc/BSD 下**不报错**、静默退回 UTC，跨零点就差一天），所以这里按 zoneinfo 实打实检查。
+          tz="${RELEASE_TZ:-Asia/Shanghai}"
+          if [ "$tz" != "UTC" ] && [ ! -e "/usr/share/zoneinfo/${tz}" ]; then
+            echo "::error::RELEASE_TZ 非法（'${tz}'）：/usr/share/zoneinfo 下没有这个时区"; exit 1
+          fi
+          TZ="$tz" date +%Y.%m.%d >/dev/null 2>&1 \
+            || { echo "::error::RELEASE_TZ 非法（'${tz}'）：date 无法使用该时区"; exit 1; }
+
+          echo "BUILD_DIR=${BUILD_DIR}（归一化后 '${norm}'） TYPST_VERSION=${TYPST_VERSION} RELEASE_TZ=${tz}"
 
       # 模板里指定的字体（见 slides/*/main.typ 的 #set text）：
       #   Noto Sans CJK SC → 中文；Inter → 西文；New Computer Modern Math 由 Typst 自带。
@@ -162,7 +200,12 @@ jobs:
           # 一旦上一次运行失败（缓存没存下来）或两次 push 挨得很近，那一次改过的 deck 就既不在
           # diff 里、缓存里又是旧 PDF，会被一直复用成旧版本 —— 线上 PDF 与 main 不一致且不会自愈。
           # stamp 里还带 Typst 版本与 workflow 内容的哈希：编译环境变了就整体重编。
-          wf_rev="$(git hash-object .github/workflows/build-and-deploy.yml 2>/dev/null | cut -c1-12)"
+          # `2>/dev/null` 是本意「容忍失败」，但 CI 的 run 块由 `bash -e {0}` 执行、脚本里的
+          # `set -uo pipefail` 并不会关掉 errexit —— 不补 `|| wf_rev=""` 的话，这行失败会
+          # **静默中止整步**（rc=128、一行日志都没有）。拿不到哈希时用一个必定不匹配 stamp 的
+          # 值，让本次退化成全量编译（fail safe）。
+          wf_rev="$(git hash-object .github/workflows/build-and-deploy.yml 2>/dev/null | cut -c1-12)" || wf_rev=""
+          [ -n "$wf_rev" ] || wf_rev="missing-$(date +%s)"
           stamp="$build_dir/.build-stamp"
           stamp_sha=""; stamp_ver=""; stamp_wf=""
           base_sha=""
@@ -207,10 +250,27 @@ jobs:
           rebuilt=0
           reused=0
 
+          # 幻灯片目录以点号开头时，`for dir in slides/*/` 根本匹配不到它 —— 会静默不编译、
+          # 不出卡片（只要还有别的 deck，found≥1 就会 exit 0），站点永远少一套。
+          # 所以单独把这种目录揪出来报错（宁可让人改名或移走）。
+          for hidden in slides/.[!.]*/ slides/..?*/; do
+            [ -e "${hidden}main.typ" ] || continue
+            echo "::error::幻灯片目录 ${hidden} 以点号开头，构建流程不会处理它（请改名或移出 slides/）"
+            failed=1
+          done
+
           for dir in slides/*/; do
             # 只处理包含 main.typ 的子目录，其他目录自动忽略
             [ -f "${dir}main.typ" ] || continue
             found=1
+            # 名字里含换行/回车时 basename 会把它们吃掉，两个不同目录会落到同一个 PDF 名上
+            # （静默互相覆盖），所以先按原始字节拦掉。
+            case "$dir" in
+              *$'\n'*|*$'\r'*)
+                echo "::error::幻灯片目录名含换行或回车（$(printf '%q' "$dir")），请改名"
+                failed=1
+                continue ;;
+            esac
             name="$(basename "$dir")"
 
             # 文件夹名会直接变成 URL 路径（<名称>.pdf）和首页链接，所以限制字符集：
@@ -230,7 +290,10 @@ jobs:
             # 需要重新编译：全量编译、缓存里没有这份 PDF、或该目录这次有改动
             need=1
             if [ "$full_rebuild" -eq 0 ] && [ -f "$build_dir/$name.pdf" ]; then
-              if ! printf '%s\n' "$changed" | grep -qF -- "$dir"; then
+              # 用 here-string 而不是 `printf … | grep -q`：grep -q 命中即退出，若 $changed 超过
+              # 管道缓冲（Linux 64 KiB，约上千个改动路径），printf 会撞 EPIPE，pipefail 取 141，
+              # `!` 把它反转成真 —— 「有改动」被误判成「没改动」，静默复用旧 PDF（已实测复现）。
+              if ! grep -qF -- "$dir" <<<"$changed"; then
                 need=0
               fi
             fi
@@ -294,14 +357,14 @@ jobs:
           # 故意做成 fail closed：文件不在时页面不会报错，只是那张图被 onerror 静默删掉，
           # 属于最难发现的坏法 —— 宁可整次构建失败。
           #
-          # 先清掉 build/ 里「非 PDF、非 index.html」的旧文件：build/ 是 actions/cache 的缓存
-          # 对象，只清 *.pdf 的话，某个版本拷进来、后来不再拷的静态资源会**永久**被缓存带下去，
-          # 并随两份 artifact 一起发布到站点根目录（自愈不了）。点号开头的 .build-stamp 不匹配
-          # "$BUILD_DIR"/*，会被保留 —— 它是下次增量编译的基准。
-          for stale in "$BUILD_DIR"/*; do
+          # 先清掉 build/ 里「非 PDF、非 index.html、非 .build-stamp」的旧文件：build/ 是
+          # actions/cache 的缓存对象，只清 *.pdf 的话，某个版本拷进来、后来不再拷的静态资源会
+          # **永久**被缓存带下去（自愈不了）。三个通配符分别覆盖普通文件、单点隐藏文件、
+          # `..` 开头的隐藏文件；.build-stamp 是下次增量编译的基准，必须留下。
+          for stale in "$BUILD_DIR"/* "$BUILD_DIR"/.[!.]* "$BUILD_DIR"/..?*; do
             [ -e "$stale" ] || continue
             case "$(basename "$stale")" in
-              *.pdf | index.html) ;;
+              *.pdf | index.html | .build-stamp) ;;
               *) echo "🧹 删除 build/ 里已不再生成的旧文件：$(basename "$stale")"; rm -rf "$stale" ;;
             esac
           done
@@ -332,7 +395,9 @@ jobs:
             printf '%s' "$value"
           }
           escape() {
-            sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'
+            # 单引号也转义：现在这些值只进元素内容、不进属性，但补上成本为零，
+            # 免得以后有人把 title 拿去拼属性时才想起它。
+            sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g' -e "s/'/\&#39;/g"
           }
 
           for dir in slides/*/; do
@@ -359,7 +424,9 @@ jobs:
             # 注意末尾的 `|| true`：grep 无匹配时退出 1，在本步的 set -euo pipefail 下
             # 会**直接终止整个步骤**（那就不是「空胶囊」而是整次部署被跳过），所以必须吞掉。
             pages="$(strings "$pdf" | grep -o '/Count [0-9]\{1,4\}' | awk '{print $2}' | sort -n | tail -1)" || true
-            pages_html="<span class=\"badge\">${pages} 页</span>"
+            # 读不到页数时**整枚胶囊都不放**（否则页面上会冒出一个只有「页」字的空胶囊）
+            pages_html=""
+            if [ -n "$pages" ]; then pages_html="<span class=\"badge\">${pages} 页</span>"; fi
 
             title_html="$(printf '%s' "$title" | escape)"
             name_html="$(printf '%s' "$name" | escape)"
@@ -433,7 +500,7 @@ jobs:
     name: 部署到 GitHub Pages
     needs: build
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 上限：部署本身很快，卡住通常是 Pages 侧问题，别让它占满默认 6 小时
     timeout-minutes: 10
     # 同一时间只允许一个 Pages 部署，避免并发部署互相覆盖；不打断已在进行的部署
@@ -462,7 +529,7 @@ jobs:
       && (github.event_name == 'release'
       || (github.event_name == 'push' && github.ref == 'refs/heads/main')
       || (github.event_name == 'push' && github.ref_type == 'tag'))
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 上限：只是 gh + 上传附件，超时说明 GitHub API 侧卡住了
     timeout-minutes: 10
     # 发布 Release 时 GitHub 会同时产生 tag push 事件，可能让本工作流跑两次并操作
@@ -507,21 +574,53 @@ jobs:
           #   true  → 已存在；当天再次 push 时刷新说明，其它版本化 Release 只补附件
           # 「不存在」和「查不到」必须分开判断：把 403 限流 / 5xx / 网络错误当成「不存在」，
           # 会让一个已存在的版本化 Release 走「新建」分支并带上自动说明 —— 覆盖掉用户手写的说明。
-          # 所以只有明确报 not found / 404 才判 false，其它错误一律 fail closed。
-          if view_out="$(gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" 2>&1)"; then
-            exists=true
-          elif printf '%s' "$view_out" | grep -qiE 'not found|HTTP 404'; then
-            exists=false
-          else
-            echo "::error::无法确认 Release ${tag} 是否存在（gh 报错：${view_out}）。宁可失败也不覆盖可能存在的说明。"
-            exit 1
-          fi
+          # 所以只有明确报 not found / 404 才判 false；其它错误先按瞬时故障退避重试，重试仍失败才 fail closed。
+          # 重试次数/退避可用 RELEASE_VIEW_RETRIES / RELEASE_VIEW_BACKOFF 调（门禁里设成 2/0 保持秒级）。
+          exists=false
+          ours=false
+          view_out=""
+          # 标记：自动生成的说明末尾会带上它。下次遇到已存在的 Release 时，只有 body 里带这个
+          # 标记才认为「说明是我们写的、可以刷新」——否则只覆盖附件、绝不碰说明。
+          # 这样即使有人手动建/手改了当天日期 Release（vYYYY.MM.DD）的说明，也不会被自动说明盖掉。
+          marker='<!-- ci-managed -->'
+          # 旋钮要防呆：RELEASE_VIEW_RETRIES 若被设成非数字，`for x in $(seq 1 "$retries")` 在
+          # GNU 与 BSD 下行为不同（GNU 给空 → 循环零次 → 静默把「查不到」当成「不存在」，
+          # 正是这里绝不能发生的事）。所以不用 seq，自己按整数循环，非法值回退成默认。
+          retries="${RELEASE_VIEW_RETRIES:-3}"
+          case "$retries" in ''|*[!0-9]*) retries=3 ;; esac
+          [ "$retries" -ge 1 ] 2>/dev/null || retries=1
+          backoff="${RELEASE_VIEW_BACKOFF:-5}"
+          case "$backoff" in ''|*[!0-9]*) backoff=5 ;; esac
+          attempt=1
+          while [ "$attempt" -le "$retries" ]; do
+            # 一次调用同时拿到「存不存在」和「现有说明」，省一次 API 调用
+            if view_out="$(gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" --json body --jq '.body // ""' 2>&1)"; then
+              exists=true
+              case "$view_out" in *"$marker"*) ours=true ;; esac
+              break
+            fi
+            # 同样用 here-string 而不是管道：`grep -q` 命中即退出，管道另一端一旦写满就会 EPIPE，
+            # 在 pipefail 下变成整体失败 —— 那会把「明确不存在」误判成别的错误而 fail closed。
+            if grep -qiE 'not found|HTTP 404' <<<"$view_out"; then
+              exists=false
+              break
+            fi
+            if [ "$attempt" -lt "$retries" ]; then
+              echo "::warning::第 ${attempt} 次查询 Release ${tag} 失败（${view_out}），${backoff}s 后重试"
+              sleep "$backoff"
+            else
+              echo "::error::无法确认 Release ${tag} 是否存在（gh 报错：${view_out}）。宁可失败也不覆盖可能存在的说明。"
+              exit 1
+            fi
+            attempt=$((attempt + 1))
+          done
           echo "Release ${tag} 是否已存在：${exists}"
 
           {
             echo "tag=${tag}"
             echo "managed=${managed}"
             echo "exists=${exists}"
+            echo "ours=${ours}"
           } >> "$GITHUB_OUTPUT"
 
       - name: 下载编译产物
@@ -533,7 +632,9 @@ jobs:
       # 生成说明：按日期维护的那个 Release 每次都刷新；
       # 其它版本化 Release 只在新建时写一次，已存在时绝不动你手写的说明。
       - name: 生成 Release 说明
-        if: steps.version.outputs.managed == 'true' || steps.version.outputs.exists == 'false'
+        # 新建时当然要写；已存在时**只有 body 带我们的机器标记**才重写 —— 否则说明是别人写的，
+        # 一个字都不动（这正是 §4 承诺的「绝不覆盖用户手写的说明」，现在对日期 tag 也成立）。
+        if: steps.version.outputs.exists == 'false' || steps.version.outputs.ours == 'true'
         env:
           TAG: ${{ steps.version.outputs.tag }}
           MANAGED: ${{ steps.version.outputs.managed }}
@@ -542,7 +643,7 @@ jobs:
           site="https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}"
           # tag 里可能出现 git ref 允许的任何字符（( ) 空格 # % & 等），放进 URL 路径必须整体
           # 转义，否则 Markdown 链接会被截断或指向别处。用 python3 按 RFC 3986 做百分号编码
-          # （ubuntu-latest 自带 python3，verify-site.sh 也依赖它）。
+          # （ubuntu-24.04 自带 python3，verify-site.sh 也依赖它）。
           tag_url="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$TAG")"
 
           {
@@ -561,13 +662,16 @@ jobs:
             echo "站点首页：<${site}/>"
             echo
             echo "<sub>由 GitHub Actions 自动生成 · 提交 \`${GITHUB_SHA:0:7}\`</sub>"
+            # 机器标记：下次同一天刷新时靠它判断「这份说明是我们写的」，渲染后不可见。
+            echo
+            echo '<!-- ci-managed -->'
           } > "$RUNNER_TEMP/release-notes.md"
 
           cat "$RUNNER_TEMP/release-notes.md"
 
       # 当天/新建的 Release：覆盖附件并刷新说明
-      - name: 发布（日期 Release / 新建版本化 Release）
-        if: steps.version.outputs.managed == 'true' || steps.version.outputs.exists == 'false'
+      - name: 发布（新建 Release / 刷新我们自己的说明）
+        if: steps.version.outputs.exists == 'false' || steps.version.outputs.ours == 'true'
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.version.outputs.tag }}
@@ -580,8 +684,10 @@ jobs:
           fail_on_unmatched_files: true
 
       # 已经存在的其它版本化 Release（例如从网页发布）：只补/覆盖附件，不传 body
-      - name: 只更新已有版本化 Release 的附件
-        if: steps.version.outputs.managed == 'false' && steps.version.outputs.exists == 'true'
+      - name: 只更新附件（已有 Release 的说明不是自动生成的）
+        # 覆盖剩下所有情况：Release 已存在、且说明里没有我们的标记（用户手写 / 旧版工作流建的）。
+        # 只补/覆盖同名附件，**不传 body_path**，所以手写说明原样保留。
+        if: steps.version.outputs.exists == 'true' && steps.version.outputs.ours != 'true'
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.version.outputs.tag }}

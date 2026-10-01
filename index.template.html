@@ -221,7 +221,9 @@
       /* 三种模式各配一个图标，只显示当前那个：
          太阳 = 浅色、半明半暗的圆 = 自动跟随系统、月亮 = 深色。
          （半明半暗是「自动/对比度」的经典符号，比在太阳/月亮角上加小点更干净，
-          三个图标分量也相当。）没有 data-mode 时（JS 被禁用）按默认显示太阳。
+          三个图标分量也相当。）按钮在 HTML 里就带着 data-mode="auto"，所以**无 JS 时显示的是
+         「自动」图标**（按钮此时点了没反应，页面恒为浅色）。最后那条 `:not([data-mode])` 规则
+         只是兜底：万一以后有人把属性去掉，至少还显示太阳而不是一个图标都没有。
 
          写法上让**默认全部隐藏**（.icon-sun 也一起隐藏），只由「当前模式」那条规则
          打开一个 —— 这样任何情况下最多只有一个图标可见，不会出现太阳和月亮同时画出、
@@ -465,7 +467,11 @@
       // 这段在首次绘制前执行，避免闪一下浅色再变深。
       (function () {
         var root = document.documentElement;
-        var query = window.matchMedia("(prefers-color-scheme: dark)");
+        // 极老的浏览器可能没有 matchMedia：给个等价的桩，别让整段脚本在这里抛异常
+        // （那样连点击监听都注册不上，按钮彻底失效）
+        var query = window.matchMedia
+          ? window.matchMedia("(prefers-color-scheme: dark)")
+          : { matches: false, addEventListener: null, addListener: null };
         var mode = "auto";
         try {
           var saved = localStorage.getItem("theme");
