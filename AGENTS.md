@@ -167,7 +167,10 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
   tag / release / 手动运行一律全量编译。
 - **导航页**：`index.template.html` 是首页模板（版式/样式都在里面），workflow 只负责
   注入数据，产物 `build/index.html` 是**服务端渲染**的静态页（无 JS 也能看）。
-  三处占位注释由 `awk` 替换：`SLIDES`（卡片列表）、`COUNT`（套数）、`META`（更新时间+提交号）。
+  三处占位注释由 `awk` 替换：`SLIDES`（卡片列表）、`COUNT`（套数）、`META`（页脚的「最后更新 …」）。
+  页脚**只放这个时间戳**：原来那句「本页由 GitHub Actions 自动生成」说的是构建过程、不是页面内容，
+  已删（与早先删掉 "Built by Typst & Touying." 同理）；提交号也一并不显示了——它是构建提交，
+  跟某套幻灯片最后一次改动无关，容易被误读。
   卡片数据来源：
   - **标题/副标题**：`sed` 从各 deck 的 `config-info(...)` 里取 `title:` / `subtitle:`，依次尝试
     `[..]` 单独成行 → 单行里的 `[..]` → `".."` 字符串写法；**跳过注释行**（否则
@@ -265,7 +268,8 @@ gh api repos/tortrixx/slides/releases --jq '.[].tag_name'
 
 ```bash
 RUNNER_TEMP=/tmp/rt BUILD_DIR=build RELEASE_TZ=Asia/Shanghai \
-  GITHUB_SHA=$(git rev-parse --short HEAD) bash /tmp/wf-scripts/build-5-*.sh
+  bash /tmp/wf-scripts/build-5-*.sh
+# 这一步已不需要 GITHUB_SHA（页脚不再显示提交号）。
 # 然后用无头 Chrome 截图看效果。两个坑：
 #   1) headless 默认 prefers-color-scheme: dark —— 想截浅色要显式 remove("dark")
 #   2) 入场动画带 fill-mode: both，t=0 时元素是 opacity:0 —— 截图前注入

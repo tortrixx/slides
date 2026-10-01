@@ -309,7 +309,9 @@ jobs:
           done
 
           # ---------- 2) 把生成结果套进模板 ----------
-          meta="最后更新 $(TZ="${RELEASE_TZ}" date '+%Y-%m-%d %H:%M') · 提交 ${GITHUB_SHA:0:7}"
+          # 只写「最后更新」：这是**构建**时间，不是每套幻灯片的内容时间（改一套 deck 也会
+          # 让首页时间戳刷新），所以不配提交号，免得被读成「最新内容就是这个提交」。
+          meta="最后更新 $(TZ="${RELEASE_TZ}" date '+%Y-%m-%d %H:%M')"
 
           awk -v items="$items" -v count="$count" -v meta="$meta" '
             /<!--SLIDES-->/ { while ((getline line < items) > 0) print line; close(items); next }
