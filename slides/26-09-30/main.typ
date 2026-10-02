@@ -11,6 +11,7 @@
     date: datetime.today(),
     institution: [AI Research Group],
   ),
+  footer-progress: false,
 )
 
 #set text(
