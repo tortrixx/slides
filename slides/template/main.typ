@@ -150,7 +150,7 @@ cd slides/my-talk && typst watch main.typ
 
 两段并排用 `#cols`，列宽可以自己定：
 
-#cols(columns: (1fr, 1fr))[
+#cols(columns: 2, gutter: 12em)[
   *左边这一栏*
 
   - 第一个要点
