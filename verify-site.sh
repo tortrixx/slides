@@ -276,13 +276,16 @@ chk "① 首页卡片数" "$(grep -c 'class="deck fade"' "$R/build/index.html")"
 # 头像等站点资源是「生成导航页」那步从 assets/ 拷进 build/ 的：漏拷不会报错，
 # 只是 img 被 onerror 静默删掉，所以这里钉一下产物里确实有它
 chk "① 站点资源 icon.png 已进 build/" "$([ -f "$R/build/icon.png" ] && echo yes || echo no)" yes
-# 占位注释必须被**全部消费掉**：改名/拼错一个 token 不会报错，只会让那段内容静默消失
-# （而且它本来是 HTML 注释，页面上根本看不见，连症状都没有）—— 属于典型「门禁假绿」区。
+# 占位注释必须被**消费掉**：token 拼对了、但 workflow 那侧的 awk 规则被删/改名时，那一行会
+# 原样留在产物里（HTML 注释在页面上根本看不见，连症状都没有）—— 属于典型「门禁假绿」区。
+# **它不管什么**：token 自己拼错（比如写成 `<!--SLIDE-->`）时残留 grep 是空的，那种由上面
+# 那条「首页卡片数」兜住（卡片会变成 0）。别把这条当万能。
 # 以前这里钉的是「页面 h1 里的 count 胶囊是个数字」，那条断言跟着标题从 h2 搬到 h1 改过一次；
-# 2026-10 标题旁的套数去掉之后（见 AGENTS「首页视觉」），改成钉三个 token 的残留 ——
-# 覆盖面反而更宽（SLIDES / COUNT / META 一起），也不再依赖标题那一行的写法。
-left="$(grep -oE '<!--(SLIDES|COUNT|META)-->' "$R/build/index.html" | paste -sd' ' -)"
-chk "① 占位注释已全部替换（产物里没有残留）" "$left" ""
+# 2026-10 标题旁的套数去掉之后（见 AGENTS「首页视觉」），改成钉三个 token 的残留。
+# `|| true`：没有残留 = grep 退出 1，pipefail 会让整条管道非零，而那是**成功**路径 ——
+# 不加的话 `bash -e verify-site.sh` 会在这里无声中止（脚本顶部 capture 的注释讲的就是这件事）。
+left="$(grep -oE '<!--(SLIDES|COUNT|META)-->' "$R/build/index.html" | paste -sd' ' - || true)"
+chk "① 占位注释已全部消费（产物里没有残留）" "$left" ""
 if grep -q '最后更新 ' "$R/build/index.html"; then ok "① 页脚时间戳已注入（META 占位符生效）"
 else bad "① 页脚没有时间戳：META 占位符可能被改名/拼错"; fi
 
@@ -399,8 +402,16 @@ else bad "⑦ 正常 PDF 的页数胶囊没渲染出来（/Count 解析回归？
 #      runner 的 locale 变（实测 C.UTF-8 把中文排最后、en_US.UTF-8 排最前）；
 #    * 空日期那一行有个真实解析坑：`read` 会吃掉行首的 IFS 空白，若直接把空值写进 TSV，
 #      文件名会被读进日期字段（整行错位）——所以夹具里专门放一套**从未提交过**的 deck。
-#    夹具刻意让「日期序」与「名字序」相反（zz-old 名字靠后但日期最新），这样只按名字排也会挂。
-#    日期只在构建时用来排序、**不渲染到页面**（用户明确不要那一列日期），所以这里只钉 href 顺序。
+#    夹具构成（三套有日期 + 一套没有，故意让各种排法都给出不同顺序）：
+#      mm-same  2026-01-01 ┐同一天：专门钉 `-k2,2` 这个**同日兜底键**（名字升序 → mm-same 在前）
+#      zz-new   2026-01-01 ┘
+#      aa-old   2020-01-01    最旧
+#      mm-nodate 从未提交     空日期 → 走 0000-00-00 占位，排最后
+#    期望 mm-same zz-new aa-old mm-nodate 与「纯名字升序」（aa-old mm-nodate mm-same zz-new）、
+#    「同日按名字倒序」（zz-new mm-same …）都不同，所以这两种写错都会红。
+#    **没覆盖的**：`LC_ALL=C` 本身 —— 要验它得用非 ASCII 名字，而中日韩名字在不同 locale 下
+#    的先后本来就不同、会随 runner 的 locale 变，钉进去就是假红风险，所以只在这里说明、不钉。
+#    日期只在构建时用来排序、**不渲染到页面**（用户明确不要那一列），下面另有一条正面断言查这个。
 R10="$TMP/repo-order"; fresh "$R10"
 rm -rf "$R10/slides" "$R10/build"; mkdir -p "$R10/slides" "$R10/build"
 mkdeck() {
@@ -408,21 +419,26 @@ mkdeck() {
   printf '#set document(title: "%s")\n#set page(paper: "a4")\n= 正文\n' "$2" > "$R10/slides/$1/main.typ"
   : > "$R10/build/$1.pdf"   # 空 PDF：导航页只要求文件存在（大小 0 B、读不到 /Count，正好也覆盖那条路径）
 }
-mkdeck zz-old "旧的"
+mkdeck mm-same "同一天 A"
+mkdeck zz-new "同一天 B"
+( cd "$R10" && git add -A && GIT_AUTHOR_DATE=2026-01-01T00:00:00 GIT_COMMITTER_DATE=2026-01-01T00:00:00 \
+    git -c user.email=v@x -c user.name=v commit -qm same ) >/dev/null 2>&1
+mkdeck aa-old "旧的"
 ( cd "$R10" && git add -A && GIT_AUTHOR_DATE=2020-01-01T00:00:00 GIT_COMMITTER_DATE=2020-01-01T00:00:00 \
     git -c user.email=v@x -c user.name=v commit -qm old ) >/dev/null 2>&1
-mkdeck aa-new "新的"
-( cd "$R10" && git add -A && GIT_AUTHOR_DATE=2026-01-01T00:00:00 GIT_COMMITTER_DATE=2026-01-01T00:00:00 \
-    git -c user.email=v@x -c user.name=v commit -qm new ) >/dev/null 2>&1
 mkdeck mm-nodate "没提交过的"   # 故意不提交：git log 取不到日期
 capture run_index "$R10" "$T"
 chk "⑩ 含无日期 deck 时导航页仍要成功" "$rc" 0
-order="$(grep -o 'href="[^"]*\.pdf"' "$R10/build/index.html" | sed 's/href="//;s/"$//' | paste -sd' ' -)"
-chk "⑩ 顺序＝最新在前（日期倒序，无日期排最后）" "$order" "aa-new.pdf zz-old.pdf mm-nodate.pdf"
-# 反面对照：日期只用于排序，不该被渲染出来（那一列已经去掉了；顺手钉住，免得又悄悄回来）
-if grep -q 'class="lede"' "$R10/build/index.html"; then
-  bad "⑩ 页面上不应该再出现日期列（class=\"lede\"）"
-else ok "⑩ 日期不渲染到页面（只用于排序）"; fi
+# grep 在「没有匹配」时退出 1，pipefail 会让整条管道非零 —— 那是**成功**路径，
+# 不加 `|| true` 的话 `bash -e verify-site.sh` 会在这里无声中止（见顶部 capture 的注释）。
+order="$(grep -o 'href="[^"]*\.pdf"' "$R10/build/index.html" | sed 's/href="//;s/"$//' | paste -sd' ' - || true)"
+chk "⑩ 顺序＝最新在前（日期倒序、同日按名字升序、无日期排最后）" \
+    "$order" "mm-same.pdf zz-new.pdf aa-old.pdf mm-nodate.pdf"
+# 正面断言：**卡片区**里不该出现任何 YYYY-MM-DD 形态的文本（日期只用于排序）。
+# 注意不能直接整页 grep —— 页脚的「最后更新 2026-…」本身就是一个日期，而且它在 <main> 之外。
+if sed -n '/<main/,/<\/main>/p' "$R10/build/index.html" | grep -qE '[0-9]{4}-[0-9]{2}-[0-9]{2}'; then
+  bad "⑩ 卡片区渲染出了日期（日期只用于排序，不该上页面）"
+else ok "⑩ 卡片区没有日期（只用于排序）"; fi
 
 ENVCHECK=""
 for f in "$TMP"/scripts/*.sh; do grep -q 'BUILD_DIR 非法' "$f" 2>/dev/null && ENVCHECK="$f"; done

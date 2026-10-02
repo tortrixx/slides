@@ -484,6 +484,17 @@ jobs:
           HTML
           done < <(LC_ALL=C sort -t "$(printf '\t')" -k1,1r -k2,2 "$deck_list")
 
+          # process substitution 的退出码**不参与** set -e / pipefail：sort 万一失败（命令没了、
+          # 文件读不了、参数写错），while 会读到 0 行、count=0，脚本照样走完并 exit 0 ——
+          # 首页变成一个列表都没有，而 CI 全绿（实测：把 sort 换成不存在的命令，输出是
+          # 「已生成 build/index.html（0 套幻灯片）」、rc=0）。所以这里显式兜底。
+          # 可以直接要求 count>0：前面「编译」那步已经保证「一套都没有」时 exit 1，
+          # 能走到这里就必然有 deck；真为 0 只可能是排序/解析坏了 —— 宁可 fail closed。
+          if [ "$count" -eq 0 ]; then
+            echo "::error::导航页生成了 0 张卡片（sort 或 TSV 解析出问题了？）"
+            exit 1
+          fi
+
           # ---------- 2) 把生成结果套进模板 ----------
           # 只写「最后更新」：这是**构建**时间，不是每套幻灯片的内容时间（改一套 deck 也会
           # 让首页时间戳刷新），所以不配提交号，免得被读成「最新内容就是这个提交」。
