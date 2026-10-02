@@ -9,7 +9,6 @@
     title: [Intelligent Agents],
     author: [Your Name],
     date: datetime.today(),
-    institution: [AI Research Group],
   ),
   footer-progress: false,
 )
@@ -23,6 +22,13 @@
   size: 20pt,
   lang: "zh",
   region: "cn",
+)
+
+// 代码字体
+#show raw: set text(
+  font: (
+    "Maple Mono Normal NF",
+  ),
 )
 
 #show math.equation: set text(font: "New Computer Modern Math")

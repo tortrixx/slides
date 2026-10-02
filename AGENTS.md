@@ -15,7 +15,7 @@
 Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独立文件夹，
 推送到 `main` 后由 GitHub Actions 自动：
 
-1. 安装模板用到的字体（Noto Sans CJK SC / Inter）；
+1. 安装模板用到的字体（Noto Sans CJK SC / Inter / Maple Mono Normal NF）；
 2. **增量**编译所有 `slides/*/main.typ` 为 PDF；
 3. 生成 `build/index.html` 导航页并部署到 GitHub Pages；
 4. 按**当天日期**创建/更新一个 Release，把全部 PDF 作为附件。
@@ -76,10 +76,22 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
      font: ((name: "Inter", covers: "latin-in-cjk"), "Noto Sans CJK SC"),
      weight: "regular", size: 20pt, lang: "zh", region: "cn",
    )
+
+   // 代码块（raw）用 Maple Mono Normal NF，由 CI 固定版本安装（见 §4「build 细节」）；
+   // 本地没装会静默回退成默认等宽字体，所以名字写错/字体没装都不会报错。
+   #show raw: set text(font: "Maple Mono Normal NF")
+
    #show math.equation: set text(font: "New Computer Modern Math")
 
    #set heading(numbering: numbly("{1}.", default: "1.1"))
    ```
+
+   三个字族的分工：**Inter** 管西文、**Noto Sans CJK SC** 管中文（`covers: "latin-in-cjk"`
+   让 Inter 只吃拉丁、混合文本按字形逐个回退）、**Maple Mono Normal NF** 管 `raw` 代码块；
+   数学走 Typst 自带的 New Computer Modern Math，不用装。
+   注意名字写的是 **`Maple Mono Normal NF`**：字体文件 name 表里的家族名其实是
+   `Maple Mono Normal NF CN`，Typst 会把末尾的 `cn` 当风格后缀剥掉（原理见 §4），
+   所以 deck 里、CI 断言里都用剥完后的名字。
 
 4. **中西文混排不要加 `#show regex(...)` 缩放/位移规则**（2026-10 决定）：汉字与西文同为
    20pt、共用基线，交给字体自己的度量。历史上试过两种「平衡」写法，都已实测否决、别再重试：
@@ -128,7 +140,7 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
      或者改模板 / workflow 另加一个专门的字段。
    - **字体**：A4 文档没有模板前言，需自己
      `#set text(font: ((name: "Inter", covers: "latin-in-cjk"), "Noto Sans CJK SC"), size: 11pt, lang: "zh", region: "cn")`，
-     否则中文用回退字体（CI 里只保证这两个字体已安装）。
+     否则中文用回退字体（CI 里保证这两个字体已安装，见 §4「build 细节」）。
    - 中西文混排**不用加任何缩放规则**（见 §3.4，那两条都已被否决）；字号走 11pt 左右
      （放映稿才是 20pt）。
    - 增量编译、按日期发版、首页列表对它一视同仁。
@@ -184,8 +196,24 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
 
 ### build 细节
 
-- **字体**：`apt-get install fonts-noto-cjk fonts-inter`（取不到时降级为只装 CJK）。
-  故意**不装** `fonts-noto-cjk-extra`（多 145MB），代价是 `weight: "medium"` 之类中间字重回退。
+- **字体**（三个字族各一套来源，装完统一 fail closed）：
+  - **中文 / 西文**：`apt-get install fonts-noto-cjk fonts-inter`（取不到时降级为只装 CJK）。
+    故意**不装** `fonts-noto-cjk-extra`（多 145MB），代价是 `weight: "medium"` 之类中间字重回退。
+  - **代码字体（`#show raw`）**：Ubuntu 源里没有 Maple Mono，所以从上游 Release **固定版本下载**：
+    `MAPLE_MONO_VERSION`（当前 `v7.9`）+ zip 与解出的 TTF 两个 sha256，全在文件顶部 `env:` 里。
+    校验不过直接红（上游换包 / 下载被劫持都不会静默换字体）；改这几个值 = workflow 哈希变 =
+    stamp 失配 = 自动全量重编一次（理由同 `TYPST_VERSION`）。
+    只解压并安装 **Regular** 一个权重 —— 和作者本机 `~/Library/Fonts/` 里那一份完全一致
+    （v7.9 的 `MapleMonoNormal-NF-CN-Regular.ttf`，sha256 已核对相同）。
+  - **装完的断言（这一步才是关键）**：`typst fonts` 里必须同时出现 `Inter` / `Noto Sans CJK SC` /
+    `Maple Mono Normal NF`，缺一个就 `::error::` + `exit 1`。为什么必须显式断言：**缺字体时 Typst
+    不报错**，只是按字形静默回退（中文掉方块、代码掉 DejaVu），PDF 照样编得出来、CI 全绿 ——
+    这正是这次改动要根治的那种静默失效。
+  - **断言写 `Maple Mono Normal NF`，不是字体 name 表里的 `Maple Mono Normal NF CN`**：Typst 的
+    `FontInfo` 用 `typographic_family()` 把 family 末尾的风格词当后缀剥掉
+    （`crates/typst-library/src/text/font/info.rs`，SUFFIXES 里含 `cn`、`normal`、`cond`、`vf` 等），
+    系统字体与 `--font-path` 两条路径都走这段代码、跨平台结果一致 —— 按 name 表原文断言会假红。
+    （同一个机制也让 macOS 上 `typst fonts` 显示的是 `Maple Mono Normal NF`。）
 - **增量编译**：`actions/cache@v6` 以 `slides-build-main-<run_id>` 为 key、`slides-build-main-`
   为 restore-keys 缓存 `build/`。逐套判断：全量 / 缓存缺 PDF / 该目录相对**基准提交**有改动 → 重编。
   最后清理「`slides/<名称>/main.typ` 已不存在」的残留 PDF。
@@ -553,10 +581,10 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
 ### 运维备忘
 
 - **换默认分支**（比如 `main` → `master`）：要改的是**引用分支名的 5 处**（2026-10 数过）——
-  `:25` 的 `branches:` 触发器、`:182` 缓存恢复步的 `github.ref == 'refs/heads/main'`、
-  `:224` 增量编译基准判断、`:525` `deploy` 的 `if`、`:553` `release` 的 `if`
+  `:25` 的 `branches:` 触发器、`:257` 缓存恢复步的 `github.ref == 'refs/heads/main'`、
+  `:299` 增量编译基准判断、`:611` `deploy` 的 `if`、`:639` `release` 的 `if`
   （行号会随插步骤漂移，**按下面的 grep 找、别背行号**）。
-  漏掉 `:224` 那处不会报错，但每次都退化成全量编译。
+  漏掉 `:299` 那处不会报错，但每次都退化成全量编译。
   **别把另外 3 处 `github.event.deleted != true`（`verify`/`build`/`release`）也算进来** ——
   那是「删除 tag/分支也会触发 push 事件」的防护，跟分支名叫什么无关，改分支名时不用动它们。
   用 `grep -n "branches:\|refs/heads/main\|event.deleted" .github/workflows/build-and-deploy.yml`
@@ -808,6 +836,8 @@ CSSOM 也不抛错（只是 cssRules 从 51 悄悄变成 50），截图极易看
   （stamp 里存了 workflow 哈希）。但如果是**外部**变化——例如 apt 上的字体包本身升级、
   Typst 上游改了默认字体——哈希不变，未改动的 deck 仍复用旧 PDF。这种极少见的情况才需要
   到 **Actions → Caches** 删掉 `slides-build-main-*` 再跑一次。
+  代码字体不在此列：它按 sha256 钉死，上游换包会直接红而不是悄悄换掉排版（见 §4「build 细节」）；
+  仍会随镜像漂的只有 apt 装的 Noto / Inter，所以 `runs-on` 才钉 `ubuntu-24.04`。
 - Release 说明里的站点链接是按「项目页」拼出来的（`<owner>.github.io/<repo>/`）。若以后
   换成自定义域名，这段（以及首页里的相对链接之外的地方）需要同步改。
 - 首页的卡片标题是**纯文本**：deck 里 `title: [*粗体*]` 会原样显示星号，不会渲染成粗体。
@@ -840,6 +870,12 @@ CSSOM 也不抛错（只是 cssRules 从 51 悄悄变成 50），截图极易看
 - 首页卡片已显示标题、副标题、页数、大小、文件名；还想要封面缩略图或每套 deck 的自定义
   描述，可以在 index 生成步骤里扩展（缩略图可用 `typst compile --format png` 首先生成首几页）。
 - `fonts-noto-cjk-extra` 需要时加回即可（换更多中文字重）。
+- 代码字体目前只装 **Regular**（和作者本机 `~/Library/Fonts/` 里那一份一致）。若以后要用粗体代码，
+  在装字体那步的 `unzip` 成员里加上 `MapleMonoNormal-NF-CN-Bold.ttf`、并在顶部 `env:` 补一个
+  对应的 TTF sha256（zip 的哈希不变）；只加文件不补哈希会让「只校验 Regular」这件事悄悄漏掉。
+- 代码字体依赖上游 Release 的固定版本资产。万一哪天上游删了 `v7.9` 的 zip，CI 会在下载那步直接红
+  （curl 404，不是静默降级）；届时的出路是把那份 TTF（约 20MB）自持进仓库、改成从本地拷贝，
+  `env:` 里的 TTF sha256 可以原样留着继续校验。
 - 存储会随「每天一个 Release」线性增长：每次 Release 都保存一套完整 PDF 且不会自动清理。
   公开仓库的 Actions 存储免费，所以这是「慢」而不是「贵」的问题；真开始嫌大时，可以只上传
   本次重编的 PDF，或定期 `gh release delete --cleanup-tag` 清掉旧的日期版本。

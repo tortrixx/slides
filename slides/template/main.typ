@@ -29,7 +29,6 @@
     subtitle: [副标题写在这里],
     author: [你的名字],
     date: datetime.today(),
-    institution: [你的机构],
   ),
   // footer-progress: false,   // 去掉底部进度条
 )
@@ -44,6 +43,13 @@
   size: 20pt,
   lang: "zh",
   region: "cn",
+)
+
+// 代码字体
+#show raw: set text(
+  font: (
+    "Maple Mono Normal NF",
+  ),
 )
 
 // 数学公式用 Typst 自带的 New Computer Modern Math

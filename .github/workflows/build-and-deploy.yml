@@ -38,6 +38,16 @@ env:
   BUILD_DIR: build
   # 按日期发版时用哪个时区决定 tag 里的日期（想用 UTC 就写 UTC）
   RELEASE_TZ: "Asia/Shanghai"
+  # 代码块（raw）用的字体：Maple Mono Normal NF。Ubuntu 源里没有这个字体，从上游 Release
+  # 固定版本下载。版本 + 两个 sha256 都钉死，理由和 TYPST_VERSION 一样：字体换了排版就会变，
+  # 而这些值写在 workflow 文件里 → workflow 哈希变 → .build-stamp 失配 → 自动全量重编一次。
+  # 升级写法：改 MAPLE_MONO_VERSION，再把 .sha256 资产里的新哈希填到下面两行（zip 的行去
+  # Release 页面下 `MapleMonoNormal-NF-CN-unhinted.sha256`；TTF 的那行解压后 `sha256sum` 一次）。
+  MAPLE_MONO_VERSION: "v7.9"
+  # MapleMonoNormal-NF-CN-unhinted.zip 的 sha256
+  MAPLE_MONO_ZIP_SHA256: "a4ff81ab62ec4bebb0a7ebcd035289fedc5518a4f2f63dc978141f67d19f181c"
+  # 解出来的 MapleMonoNormal-NF-CN-Regular.ttf 的 sha256（也就是各 deck `#show raw` 指定的那个字体）
+  MAPLE_MONO_TTF_SHA256: "9ae0c348a44a681fa8fa20a34e782e95316cec880102295a128b65760944c0f5"
 
 # 默认最小权限；需要更高权限的 job 会在下面单独声明
 permissions:
@@ -72,19 +82,54 @@ jobs:
           # 门禁脚本不需要推送、也不用 git 凭据，别把 token 留在 .git/config 里
           persist-credentials: false
 
-      - name: 安装模板字体（Noto Sans CJK SC / Inter）
-        run: |
-          # 和 build job 装同一套：脚本要真的编译 deck（含中文），字体齐全才能保证
-          # 它不会因为环境差异而假红。故意不装 fonts-noto-cjk-extra（理由见 build job）。
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends fonts-noto-cjk fonts-inter \
-            || sudo apt-get install -y --no-install-recommends fonts-noto-cjk
-          fc-cache -f
-
+      # 先装 Typst：下面的字体步骤结尾要用 `typst fonts` 做 fail closed 断言。
       - name: 安装 Typst
         uses: typst-community/setup-typst@v5
         with:
           typst-version: ${{ env.TYPST_VERSION }}
+
+      # 和 build job 装同一套：脚本要真的编译 deck（含中文），字体齐全才能保证它不会因为
+      # 环境差异而假红；代码字体（deck 的 `#show raw` 要用）也一并装上。
+      - name: 安装模板字体（Noto Sans CJK SC / Inter / Maple Mono Normal NF）
+        run: |
+          set -euo pipefail
+
+          # ① 中文与西文走 apt。故意不装 fonts-noto-cjk-extra —— 它要额外下载约 145MB，
+          # 而模板只用到 Regular / Bold。若确实需要 Light / Medium 等更多中文字重，
+          # 把 fonts-noto-cjk-extra 加回下面的列表即可。
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fonts-noto-cjk fonts-inter \
+            || sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+          # 解压代码字体要用 unzip，个别精简镜像里没有
+          command -v unzip >/dev/null || sudo apt-get install -y --no-install-recommends unzip
+
+          # ② 代码字体：Ubuntu 源里没有 Maple Mono，从上游 Release 下固定版本（版本与哈希见文件顶部 env）。
+          # zip 与解出来的 TTF 都校验 sha256：上游改了包或下载被劫持都直接红，不会静默换掉字体。
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/maple-mono.zip" \
+            "https://github.com/subframe7536/maple-font/releases/download/${MAPLE_MONO_VERSION}/MapleMonoNormal-NF-CN-unhinted.zip"
+          echo "${MAPLE_MONO_ZIP_SHA256}  $RUNNER_TEMP/maple-mono.zip" | sha256sum -c -
+          unzip -j -o "$RUNNER_TEMP/maple-mono.zip" "MapleMonoNormal-NF-CN-Regular.ttf" -d "$RUNNER_TEMP/maple-mono"
+          echo "${MAPLE_MONO_TTF_SHA256}  $RUNNER_TEMP/maple-mono/MapleMonoNormal-NF-CN-Regular.ttf" | sha256sum -c -
+          sudo install -d /usr/share/fonts/truetype/maple-mono
+          sudo install -m644 "$RUNNER_TEMP/maple-mono/MapleMonoNormal-NF-CN-Regular.ttf" /usr/share/fonts/truetype/maple-mono/
+          rm -rf "$RUNNER_TEMP/maple-mono.zip" "$RUNNER_TEMP/maple-mono"
+
+          fc-cache -f
+
+          # ③ fail closed：这三个字族都必须真被 Typst 认出来。缺任何一个 Typst 都不报错，
+          # 只会静默回退（中文掉成方块、代码掉成 DejaVu），PDF 照样编得出来 —— 所以显式断言。
+          # 断言的是 "Maple Mono Normal NF"（deck 里写的那一个）：字体 name 表里的家族名其实是
+          # "Maple Mono Normal NF CN"，Typst 会把末尾的 "cn" 当风格后缀剥掉
+          # （typst-library/src/text/font/info.rs 的 typographic_family，SUFFIXES 里含 "cn"），
+          # 所以按 name 表原文断言会假红。
+          fonts_list="$(typst fonts)"
+          for family in "Inter" "Noto Sans CJK SC" "Maple Mono Normal NF"; do
+            grep -Fx -- "$family" <<<"$fonts_list" >/dev/null \
+              || { echo "::error::字体缺失：${family}（装字体那步没生效，PDF 会静默回退）"; exit 1; }
+          done
+
+          # 打印实际识别到的字族，方便排查（只进日志，不影响结果）
+          grep -E 'Noto Sans CJK|Inter|Maple' <<<"$fonts_list" | sort -u | head -n 10 || true
 
       - name: 跑 verify-site.sh --build
         run: bash verify-site.sh --build
@@ -151,22 +196,7 @@ jobs:
 
           echo "BUILD_DIR=${BUILD_DIR}（归一化后 '${norm}'） TYPST_VERSION=${TYPST_VERSION} RELEASE_TZ=${tz}"
 
-      # 模板里指定的字体（见 slides/*/main.typ 的 #set text）：
-      #   Noto Sans CJK SC → 中文；Inter → 西文；New Computer Modern Math 由 Typst 自带。
-      # 不装字体也能编译成功，但中文会缺字/回退，所以这里默认装好。
-      - name: 安装模板字体（Noto Sans CJK SC / Inter）
-        run: |
-          sudo apt-get update
-          # 说明：这里故意不装 fonts-noto-cjk-extra —— 它要额外下载约 145MB，
-          # 而模板只用到 Regular / Bold。若确实需要 Light / Medium 等更多中文字重，
-          # 把 fonts-noto-cjk-extra 加回下面的列表即可。
-          sudo apt-get install -y --no-install-recommends fonts-noto-cjk fonts-inter \
-            || sudo apt-get install -y --no-install-recommends fonts-noto-cjk
-          fc-cache -f
-
-          # 打印实际识别到的字族，方便排查字体问题（找不到时不要让步骤失败）
-          fc-list : family | grep -iE 'noto sans cjk|inter' | sort -u | head -n 10 || true
-
+      # 先装 Typst：下面的字体步骤结尾要用 `typst fonts` 做 fail closed 断言。
       - name: 安装 Typst
         uses: typst-community/setup-typst@v5
         with:
@@ -174,6 +204,51 @@ jobs:
           # 可选优化：把 cache-dependency-path 指向一个「只含 @preview import 行」的
           # .typ 文件即可缓存宏包（该输入只接受单个可编译的文件，不支持通配符）。
           # 需要时见 AGENTS.md 第 8 节「可能的后续改进」。
+
+      # 模板与 deck 里用到的字体（见 slides/*/main.typ 的 #set text 与 `#show raw`）：
+      #   Noto Sans CJK SC → 中文；Inter → 西文；Maple Mono Normal NF → 代码块（raw）；
+      #   New Computer Modern Math 由 Typst 自带，不用装。
+      # 不装字体也能编译成功，只是会静默回退，所以这里装完必须显式断言（见末尾 ③）。
+      - name: 安装模板字体（Noto Sans CJK SC / Inter / Maple Mono Normal NF）
+        run: |
+          set -euo pipefail
+
+          # ① 中文与西文走 apt。故意不装 fonts-noto-cjk-extra —— 它要额外下载约 145MB，
+          # 而模板只用到 Regular / Bold。若确实需要 Light / Medium 等更多中文字重，
+          # 把 fonts-noto-cjk-extra 加回下面的列表即可。
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fonts-noto-cjk fonts-inter \
+            || sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+          # 解压代码字体要用 unzip，个别精简镜像里没有
+          command -v unzip >/dev/null || sudo apt-get install -y --no-install-recommends unzip
+
+          # ② 代码字体：Ubuntu 源里没有 Maple Mono，从上游 Release 下固定版本（版本与哈希见文件顶部 env）。
+          # zip 与解出来的 TTF 都校验 sha256：上游改了包或下载被劫持都直接红，不会静默换掉字体。
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/maple-mono.zip" \
+            "https://github.com/subframe7536/maple-font/releases/download/${MAPLE_MONO_VERSION}/MapleMonoNormal-NF-CN-unhinted.zip"
+          echo "${MAPLE_MONO_ZIP_SHA256}  $RUNNER_TEMP/maple-mono.zip" | sha256sum -c -
+          unzip -j -o "$RUNNER_TEMP/maple-mono.zip" "MapleMonoNormal-NF-CN-Regular.ttf" -d "$RUNNER_TEMP/maple-mono"
+          echo "${MAPLE_MONO_TTF_SHA256}  $RUNNER_TEMP/maple-mono/MapleMonoNormal-NF-CN-Regular.ttf" | sha256sum -c -
+          sudo install -d /usr/share/fonts/truetype/maple-mono
+          sudo install -m644 "$RUNNER_TEMP/maple-mono/MapleMonoNormal-NF-CN-Regular.ttf" /usr/share/fonts/truetype/maple-mono/
+          rm -rf "$RUNNER_TEMP/maple-mono.zip" "$RUNNER_TEMP/maple-mono"
+
+          fc-cache -f
+
+          # ③ fail closed：这三个字族都必须真被 Typst 认出来。缺任何一个 Typst 都不报错，
+          # 只会静默回退（中文掉成方块、代码掉成 DejaVu），PDF 照样编得出来 —— 所以显式断言。
+          # 断言的是 "Maple Mono Normal NF"（deck 里写的那一个）：字体 name 表里的家族名其实是
+          # "Maple Mono Normal NF CN"，Typst 会把末尾的 "cn" 当风格后缀剥掉
+          # （typst-library/src/text/font/info.rs 的 typographic_family，SUFFIXES 里含 "cn"），
+          # 所以按 name 表原文断言会假红。
+          fonts_list="$(typst fonts)"
+          for family in "Inter" "Noto Sans CJK SC" "Maple Mono Normal NF"; do
+            grep -Fx -- "$family" <<<"$fonts_list" >/dev/null \
+              || { echo "::error::字体缺失：${family}（装字体那步没生效，PDF 会静默回退）"; exit 1; }
+          done
+
+          # 打印实际识别到的字族，方便排查（只进日志，不影响结果）
+          grep -E 'Noto Sans CJK|Inter|Maple' <<<"$fonts_list" | sort -u | head -n 10 || true
 
       # 增量编译的核心：把上一次的 build/ 目录取回来。
       # 没改动的幻灯片直接复用里面的 PDF，只重新编译改动过的那些。
