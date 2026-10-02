@@ -5,7 +5,7 @@
 # 对应 AGENTS.md §6「改 workflow 后的验证清单」，把第 1–4 步做成可执行的：
 #   1) 从 YAML 里抽出所有 run: 脚本
 #   2) bash -n 语法检查 + 多字节陷阱 lint
-#   3) 在 /tmp 的临时副本里真跑「编译」与「生成导航页」等步骤，覆盖七条路径：
+#   3) 在 /tmp 的临时副本里真跑「编译」与「生成导航页」等步骤，覆盖 ①~⑩：
 #        冷启动全量 / 只改一个 deck 的增量（含非 ASCII 目录名）/ 删除某套后的残留清理 /
 #        某套编译失败必须 exit 1 / 文件夹名非法必须 exit 1 / 一套都没有必须 exit 1 /
 #        导航页边界（读不到 /Count、残留文件清理、BUILD_DIR 为空必须被拒）
@@ -192,13 +192,38 @@ else
   else bad "⑧ 说明里没有机器标记 → 下次会把自己的说明当成别人的，永不刷新"; fi
 fi
 
+# ⑪ 样式表花括号平衡。多一个（或少一个）`}` **不报错、不白屏**，只会把它**后面的规则静默吞掉**：
+#    2026-10 真踩过 —— 一段重复的注释末尾多带了一个 `}`，紧跟其后的
+#    `@media (min-width: 640px) { .page-title { margin-left: 1.5rem } }` 被整块吃掉，
+#    表现是桌面端 h1 和头像**贴在一起**（无头 Chrome 实测 gap 0.0px，修好是 24px）。
+#    页面照样渲染、CSSOM 也不抛错（只是 cssRules 从 51 悄悄变成 50），截图极易看漏 ——
+#    这一类没有运行时替代品（CI 里没有浏览器），所以用静态计数钉住。
+#    统计前先去掉 `/* … */`（注释里的括号不该参与计数）；python3 是本脚本已有的依赖。
+BAL="$(python3 - index.template.html <<'PY'
+import re, sys
+s = re.sub(r"/\*[\s\S]*?\*/", "", open(sys.argv[1], encoding="utf-8").read())
+m = re.search(r"<style>([\s\S]*?)</style>", s)
+print(m.group(1).count("{"), m.group(1).count("}")) if m else print("no-style")
+PY
+)"
+case "$BAL" in
+  no-style|"") bad "⑪ 模板里找不到 <style> 块（选择器改坏了？）" ;;
+  *)
+    opens="${BAL%% *}"; closes="${BAL##* }"
+    if [ "$opens" = "$closes" ]; then
+      ok "⑪ 样式表花括号平衡（{ ${opens} 个 = } ${closes} 个）"
+    else
+      bad "⑪ 样式表花括号不平衡：{ ${opens} 个、} ${closes} 个 —— 多/少的那一个会把它后面的规则静默吞掉"
+    fi ;;
+esac
+
 if [ "${1:-}" != "--build" ]; then
   echo
   printf '静态检查：%d 通过 / %d 失败（加 --build 可连编译路径一起验）\n' "$PASS" "$FAIL"
   [ "$FAIL" -eq 0 ]; exit
 fi
 
-echo "── 3) 真跑七条路径（需要 typst）──"
+echo "── 3) 真跑 ①~⑩（需要 typst）──"
 command -v typst >/dev/null || { bad "没找到 typst，跳过"; printf '%d 通过 / %d 失败\n' "$PASS" "$FAIL"; exit 1; }
 
 COMPILE=""; INDEX=""
@@ -251,11 +276,13 @@ chk "① 首页卡片数" "$(grep -c 'class="deck fade"' "$R/build/index.html")"
 # 头像等站点资源是「生成导航页」那步从 assets/ 拷进 build/ 的：漏拷不会报错，
 # 只是 img 被 onerror 静默删掉，所以这里钉一下产物里确实有它
 chk "① 站点资源 icon.png 已进 build/" "$([ -f "$R/build/icon.png" ] && echo yes || echo no)" yes
-# 另外两个占位符（COUNT/META）也要钉：把模板里的 `<!--COUNT-->` 改名后，卡片数断言仍然过，
-# 但页面会显示空套数 / 页脚印出注释 —— 属于「门禁假绿」，所以直接断言注入结果。
-if grep -qE '<h2>Slides <span class="count">[0-9]+</span></h2>' "$R/build/index.html"; then
-  ok "① 套数已注入（COUNT 占位符生效）"
-else bad "① 套数没注入：COUNT 占位符可能被改名/拼错"; fi
+# 占位注释必须被**全部消费掉**：改名/拼错一个 token 不会报错，只会让那段内容静默消失
+# （而且它本来是 HTML 注释，页面上根本看不见，连症状都没有）—— 属于典型「门禁假绿」区。
+# 以前这里钉的是「页面 h1 里的 count 胶囊是个数字」，那条断言跟着标题从 h2 搬到 h1 改过一次；
+# 2026-10 标题旁的套数去掉之后（见 AGENTS「首页视觉」），改成钉三个 token 的残留 ——
+# 覆盖面反而更宽（SLIDES / COUNT / META 一起），也不再依赖标题那一行的写法。
+left="$(grep -oE '<!--(SLIDES|COUNT|META)-->' "$R/build/index.html" | paste -sd' ' -)"
+chk "① 占位注释已全部替换（产物里没有残留）" "$left" ""
 if grep -q '最后更新 ' "$R/build/index.html"; then ok "① 页脚时间戳已注入（META 占位符生效）"
 else bad "① 页脚没有时间戳：META 占位符可能被改名/拼错"; fi
 
@@ -366,6 +393,36 @@ else ok "⑦ 读不到 /Count 时不渲染页数胶囊"; fi
 if grep -qE '<span class="badge">[0-9]+ 页</span>' "$R/build/index.html"; then
   ok "⑦ 能读到 /Count 时正常渲染「N 页」胶囊"
 else bad "⑦ 正常 PDF 的页数胶囊没渲染出来（/Count 解析回归？）"; fi
+
+# ⑩ 列表顺序（最新在前）。这条是**静默失效**区：
+#    * 顺序退回 glob（= 当前 locale 的字典序）不会报错，只是没有意图，而且中文名的先后会随
+#      runner 的 locale 变（实测 C.UTF-8 把中文排最后、en_US.UTF-8 排最前）；
+#    * 空日期那一行有个真实解析坑：`read` 会吃掉行首的 IFS 空白，若直接把空值写进 TSV，
+#      文件名会被读进日期字段（整行错位）——所以夹具里专门放一套**从未提交过**的 deck。
+#    夹具刻意让「日期序」与「名字序」相反（zz-old 名字靠后但日期最新），这样只按名字排也会挂。
+#    日期只在构建时用来排序、**不渲染到页面**（用户明确不要那一列日期），所以这里只钉 href 顺序。
+R10="$TMP/repo-order"; fresh "$R10"
+rm -rf "$R10/slides" "$R10/build"; mkdir -p "$R10/slides" "$R10/build"
+mkdeck() {
+  mkdir -p "$R10/slides/$1"
+  printf '#set document(title: "%s")\n#set page(paper: "a4")\n= 正文\n' "$2" > "$R10/slides/$1/main.typ"
+  : > "$R10/build/$1.pdf"   # 空 PDF：导航页只要求文件存在（大小 0 B、读不到 /Count，正好也覆盖那条路径）
+}
+mkdeck zz-old "旧的"
+( cd "$R10" && git add -A && GIT_AUTHOR_DATE=2020-01-01T00:00:00 GIT_COMMITTER_DATE=2020-01-01T00:00:00 \
+    git -c user.email=v@x -c user.name=v commit -qm old ) >/dev/null 2>&1
+mkdeck aa-new "新的"
+( cd "$R10" && git add -A && GIT_AUTHOR_DATE=2026-01-01T00:00:00 GIT_COMMITTER_DATE=2026-01-01T00:00:00 \
+    git -c user.email=v@x -c user.name=v commit -qm new ) >/dev/null 2>&1
+mkdeck mm-nodate "没提交过的"   # 故意不提交：git log 取不到日期
+capture run_index "$R10" "$T"
+chk "⑩ 含无日期 deck 时导航页仍要成功" "$rc" 0
+order="$(grep -o 'href="[^"]*\.pdf"' "$R10/build/index.html" | sed 's/href="//;s/"$//' | paste -sd' ' -)"
+chk "⑩ 顺序＝最新在前（日期倒序，无日期排最后）" "$order" "aa-new.pdf zz-old.pdf mm-nodate.pdf"
+# 反面对照：日期只用于排序，不该被渲染出来（那一列已经去掉了；顺手钉住，免得又悄悄回来）
+if grep -q 'class="lede"' "$R10/build/index.html"; then
+  bad "⑩ 页面上不应该再出现日期列（class=\"lede\"）"
+else ok "⑩ 日期不渲染到页面（只用于排序）"; fi
 
 ENVCHECK=""
 for f in "$TMP"/scripts/*.sh; do grep -q 'BUILD_DIR 非法' "$f" 2>/dev/null && ENVCHECK="$f"; done

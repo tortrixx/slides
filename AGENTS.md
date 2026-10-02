@@ -46,7 +46,7 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
 ├── index.template.html       # 站点首页模板（构建时注入幻灯片列表）
 ├── assets/
 │   └── icon.png              # 站点静态资源（左上角头像），构建时拷进 build/
-├── verify-site.sh            # CI 门禁脚本：抽 workflow 脚本 + 语法/lint + 真跑七条路径 + Release/tag 逻辑
+├── verify-site.sh            # CI 门禁脚本：抽 workflow 脚本 + 语法/lint + 真跑 ①~⑩ + Release/tag 逻辑
 ├── AGENTS.md                 # 本文件
 ├── README.md                 # 6 行：定位一句话 + 在线地址，不放任何清单/操作
 └── .gitignore                # 忽略 build/ 与本地编译出的 slides/*.main.pdf
@@ -154,7 +154,7 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
 
 | job | 条件 | 权限 | 作用 |
 | --- | --- | --- | --- |
-| `verify` | `github.event.deleted != true` | 默认（`contents: read`） | 门禁：跑 `verify-site.sh --build`（七条路径 + Release/tag 逻辑），失败则后面全部不执行 |
+| `verify` | `github.event.deleted != true` | 默认（`contents: read`） | 门禁：跑 `verify-site.sh --build`（①~⑩ + Release/tag 逻辑），失败则后面全部不执行 |
 | `build` | `github.event.deleted != true` | `contents: read` | 装字体 → 增量编译 → 生成导航页 → 上传两份产物 |
 | `deploy` | `refs/heads/main` 的 push 或手动 | `pages: write`, `id-token: write` | `actions/deploy-pages` 发布 `build/` |
 | `release` | main push / 推送 tag / release 事件 | `contents: write` | 计算 tag → 写说明 → 建/更新 Release |
@@ -219,9 +219,27 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
 - **导航页**：`index.template.html` 是首页模板（版式/样式都在里面），workflow 只负责
   注入数据，产物 `build/index.html` 是**服务端渲染**的静态页（无 JS 也能看）。
   三处占位注释由 `awk` 替换：`SLIDES`（卡片列表）、`COUNT`（套数）、`META`（页脚的「最后更新 …」）。
+  **`awk` 是按行替换的，不认 HTML 注释** —— 所以**绝不要在模板（或任何会被喂给那段 awk 的文件）里
+  写出占位符的原文**：写了 `SLIDES` 那处的原文，整行会被换成卡片列表并塞在注释中间；写了 `COUNT`
+  那处的原文，它会就地变成数字。这不是推演：模板开头的注释里最早写过 `COUNT` 的原文，
+  构建产物里那句真的成了「注意 2 现在模板里没有用了」（2026-10 实测）。
+  现在模板里提到它们只写名字，原文只出现在两处真正的注入点（`SLIDES` 与 `META`）；
+  **`COUNT` 目前模板里没有用到**（标题旁的套数已按用户要求去掉，理由见「首页视觉」），
+  但 workflow 的替换规则留着 —— 想恢复套数显示只需改模板，不用碰 YAML。
   页脚**只放这个时间戳**：原来那句「本页由 GitHub Actions 自动生成」说的是构建过程、不是页面内容，
   已删（与早先删掉 "Built by Typst & Touying." 同理）；提交号也一并不显示了——它是构建提交，
   跟某套幻灯片最后一次改动无关，容易被误读。
+  - **顺序＝最新在前**：先按 `git log -1 --format=%cs -- "slides/<名>/"` 取每套 deck **最后一次
+    提交的日期**，`LC_ALL=C sort -t $'\t' -k1,1r -k2,2` 排序（日期倒序、同一天按文件夹名升序），
+    取不到日期（浅克隆 / 从未提交）的排最后。**不要退回 `for dir in slides/*/`**：那是 bash 的
+    glob 顺序 =「当前 locale 的字典序」，跟改没改无关，而且中文名的先后会随 runner 的 locale 变
+    （实测同一组名字：C.UTF-8 把中文排最后、en_US.UTF-8 排最前、zh_CN.UTF-8 又排最后）。
+    日期**只用于排序、不渲染到页面**（那一列已经去掉了，原因见「首页视觉」那节）。
+    两个实现坑（都踩过并写进了门禁）：① 空日期不能直接写进 TSV —— `read` 会吃掉行首的 IFS 空白，
+    文件名会被读进日期字段、整行错位；脚本里把它换成 `0000-00-00` 占位、循环里再换回空串。
+    ② `[ "$d" = "x" ] && x=""` 这种一行写法在 `set -e` 下会留下非零退出码，落在脚本末尾会把
+    整步判成失败，所以写成正常的 `if`。
+    日期取自 git，所以 checkout 的 `fetch-depth: 0`（增量编译本来就需要）不能去掉。
   卡片数据来源：
   - **标题/副标题**：`sed` 从 `main.typ` 里取**第一个** `title:` / `subtitle:`，依次尝试
     `[..]` 单独成行 → 单行里的 `[..]` → `".."` 字符串写法；**跳过注释行**（否则
@@ -237,12 +255,13 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
     顶走、在卡片中间留下纯空格行；另外别把变量写在行首，YAML 的块标量会因此提前结束（已踩）。
   - **链接与文件名**：`<文件夹名>.pdf`（与 `title` 无关）；大小由 `wc -c` 换算，
     分 B / KB / MB 三档（不足 1 MiB 时封顶 1023，避免出现 "1024 KB"）。
-  - **卡片副信息行**：`<页数> 页 · <大小> · <文件名>.pdf`，前两项是 .badge 胶囊标签。
+  - **卡片副信息行**：`<页数> 页 · <大小> · <文件名>.pdf`（一行淡色文字，分隔点由 CSS 生成）。
+    前两项在 workflow 里仍写作 `<span class="badge">`，但**CSS 里已经没有胶囊样式了**（见「首页视觉」）。
     页数从 PDF 页树根节点的 `/Count` 取（`strings | grep -o '/Count [0-9]\{1,4\}'`
     取最大值；Typst 产出的 PDF 未压缩所以读得到，已核对 49/20 与逐页渲染数一致）。
     **原来看起来多余的 `PDF` 徽章已去掉**——链接本身就是 `.pdf`、点了就是打开 PDF，
     文件名里又写了一遍，三处重复；换成页数更有信息量。若哪天读不到 `/Count`（例如 PDF 开始
-    压缩），**那一枚整枚都不渲染**（不是渲染一个只有「页」字的空胶囊），所以这个取法不会给出错的信息。
+    压缩），**那一枚整枚都不渲染**（不会留下一个只有「页」字的空项），所以这个取法不会给出错的信息。
     门禁同时钉了两面：读不到时不许出现「N 页」，正常 PDF 必须出现「N 页」。
   - **转义**：文件夹名与标题/副标题都会做 HTML 转义（`&` `<` `>` `"`），
     文件夹名另有字符集护栏（见 §3.8），两道一起保证生成的 HTML 不会被名字搞坏。
@@ -261,7 +280,7 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
   - 它会 **302** 到 `avatars.githubusercontent.com`，多一次 DNS + TLS，实测 1.84s 才拿到图；
     而且这个 302 带 `cache-control: no-cache`，**每次打开都要重走一遍**（图的 `max-age=300`
     只能省掉第二步）；
-  - 抓回来的是 **460×460 / 38 KB**，而页面只用 80px 显示（`?size=160` 才是 12 KB）；
+  - 抓回来的是 **460×460 / 38 KB**，而（当时）页面只用 80px 显示（`?size=160` 才是 12 KB）；
   - 国内网络下 `avatars.githubusercontent.com` 还常慢/不可达（那 `onerror` 会把图整个删掉）。
   现在用仓库内 160×160（2× DPR）PNG，15.9 KB，同源、可长期缓存、零外部依赖。
   **换图直接替换 `assets/icon.png` 即可**，别改回外链。
@@ -273,12 +292,122 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
   装饰性动效都做了降级：光带用 `@supports (offset-path: rect(...))` 包住（不支持就整条不显示，
   否则会在左上角糊一块渐变色），`prefers-reduced-motion: reduce` 时关闭淡入并隐藏光带，
   键盘焦点用 `:focus-visible` 描边。改 CSS 时请保留这些降级。
+  两处**对着原站量过**的地方（2026-10，用户对照 <https://tortrixx.pages.dev/> 提的）：
+  - **顶栏 = 头像 + 主标题（h1）+ 右上角按钮，一行（≥640px；窄屏纵向堆叠）；页面没有标语，也没有区块 h2**（2026-10 定稿）：
+    原来这里是「头像 + 标语 `Less noise, more signal.`」一行，下面再单独一行 `h2 Slides`。
+    去掉标语的理由：① 那是原站（个人主页）的座右铭，对这一页不携带任何信息；
+    ② 这一页只有一个区块，"标识行 + 区块标题行"两行在说同一件事，本来就冗余；
+    ③ 把 `Slides` 提上来当 `h1` 之后**语义更好** —— h1 说的是这一页到底是什么，
+    而标语当 h1 属于"没说出页面主题"。
+    **别把唯一的 h1 弄丢**（无 h1 对读屏和搜索都不友好），要改标题名就改 `.page-title` 这一处；
+    以后若按年/主题分组，每组再用 `h2`（字号 1.125rem 一档、比主标题小），别把主标题降级。
+    用户如果哪天真想留这句标语，正确的位置是**页脚**（一行小字），不要放回顶栏。
+    头像跟着从 80px 改到 64px（`img` 的 `width`/`height` 属性要一起改）：一行里它和 1.5rem 的
+    标题按居中对齐，80px 会显得头重。
+    **主标题不带任何装饰**（不加下划线、不加边框）：参考站全站没有一处 `underline`（它的 h1 就是
+    `text-xl font-bold`，2026-10 拉下它的 HTML 核过），而这里标题下方已经有 `.head-row` 的通栏
+    `border-bottom` 收口，再加下划线是重复装饰。
+    顺带一个**踩过的真坑**（用户报"Slides 和 2 都带下划线"）：`.page-title` 是 flex 容器，里面的
+    `.count` 作为 flex item 会被 **blockify**（`inline-block` → `block`），于是它不再是「原子内联
+    后代」，而 **祖先的 `text-decoration` 会传播进后代、后代自己写 `text-decoration: none` 是撤不掉
+    的** —— 所以下划线会画到计数胶囊下面去（无头 Chrome 3× 截图可见）。两条出路：要么别给标题加
+    下划线（现在的选择），要么把文字包进内层 `<span class="pt-text">` 再把下划线加在它身上。
+    别指望 `.count` 自己那条 `display: inline-block` 能挡住传播 —— 它只在父级**不是** flex/grid
+    容器时才有效。
+    **标题旁的套数胶囊也删了**（2026-10 用户提的，`.count` 那条 CSS 跟着一起删，模板里现在只剩
+    一段「当年怎么写」的注释）：计数的价值在于「概括你看不到的东西」——GitHub 那种 tab 计数概括的
+    是**筛选后的子集**（Open 12 / Closed 30），而我们这个数字概括的就是你正在看的这一页，
+    跟逐条数一遍是同一件事；**放页脚也不行**：读到页脚时列表早看完了，那时它更没用。
+    真要恢复：h1 里加回套数 span + 把 `.count` 规则写回模板（注释里留了原文），
+    **workflow 不用动** —— `COUNT` 的 `awk` 替换规则一直留着（也见下面「导航页」那节里
+    「别在模板里写占位符原文」那个坑）。
+  - **字重：两处都写 `500`（意图 medium），不要写 600**（2026-10 定稿；用户前后提过两次 ——
+    先是「照着原站把标语/标题加粗一点」，看到效果后又说「加粗有点过了、每个 pdf 的标题也不能过粗」）：
+    原站那两处写的是 `font-medium`(500)，它看着真的是 medium，是因为它**自带 Roboto Mono Variable**
+    （`@font-face` 里 `font-weight: 100 700`）。本页走系统等宽字体栈（`ui-monospace` → SF Mono /
+    Menlo / Consolas…），无头 Chrome 实测（macOS，3× 放大、20px/18px 两个真实字号）：
+    **400 与 500 渲染完全一致、600 与 700 都画出粗体且彼此一致** —— 这套字体只有 regular + bold
+    两档，**"medium" 这一档根本不存在**。
+    所以：写 600 等于 bold（用户觉得过了），写 500 在本机落 regular，但在**有自变量字体**的环境里
+    会自然落到真正的 medium —— 写 500 表达的是**意图**，两个方向都不吃亏。
+    层级由此改由**字号 + 颜色**承担：h1 24px / 行标题 18px / 副标题 14px / 元信息 12px，
+    颜色只用「纯黑 vs muted」两级。**别再改回 600**（在当前环境里就是 bold）。
+    想连字形一起 100% 复刻原站的真实 medium，唯一办法是把它那份
+    `roboto-mono-*-wght-normal.woff2` 自持进 `assets/`：加 `@font-face`（`font-weight: 100 700`）、
+    把 `Roboto Mono` 放到字体栈最前，**并且改 workflow 的 assets 拷贝那一步**（现在是写死的
+    `cp assets/icon.png …` + fail-closed 检查，不是通配）—— 改 YAML 会让下一次 push 全量重编。
+    为这 ~30KB 暂时不做，路径记在这里：将来要做就是这三处（另外记得给门禁补一条产物断言）。
+  - **列表版式：纯列表 + 两级分隔线（行线两端渐隐），行内不再有任何色条，也不显示日期**（2026-10 定稿）：
+    历史是：① 每张卡一根粉条 → ② 红条挪到 `h2`、卡片竖条改中性灰 hover 变粉 → ③ 去掉色条、
+    改成「左侧日期列 + 通栏细线」 → ④ 去掉日期列、分隔线做层级 → ⑤（现在）行线的两端改为渐隐、
+    行距放大，**主标题（h1）的下划线去掉**（行标题仍保留 hover 下划线，见 `.deck:hover .deck-title`）。
+    为什么最后全去掉：原站那根 `w-1.5 bg-red-400/60 group-hover:bg-red-400` 是**分组标题**的
+    标记（<https://tortrixx.pages.dev/workspace> 整页 4 个分组 = 4 根，组内几十个 `<li>` 一根
+    都不带），我们把它按行复制就等于把一个章节符号复印 N 份；而挪到 `h2` 后又只剩"装饰"一个
+    理由（单组页面里它不携带信息，用户也不想要）。所以：**一行一根条、一页一根条都不要再加**。
+    **日期为什么不上页面**（③ 那版的 `.lede` 列已删，用户提的）：它是「这套 deck 上一次提交」，
+    不是内容本身的日期（改个错别字也会把它顶到最前，容易被读成"最新内容"）；而且要占一条
+    5.6rem 的固定列、窄屏还得为它堆叠换行。顺序仍然是「最新在前」—— 日期只用于**构建时排序**
+    （见下面「导航页」那节），不渲染。真想在页面上透出"新旧"，更轻的做法是给最近改过的行加个
+    小圆点，**不要**恢复整列日期。
+    分隔线做成**两级**（2026-10 用户提的「行线跟页眉那条一样，分不出来」，改了两轮）：
+    * 页眉下面那条（`.head-row` 的 `border-bottom`）= **区块边界**：通栏、实线、`hsl(var(--border))`，
+      两端到头；
+    * 行与行之间（`.deck + .deck::before`）= **区块内的条目**：`height: 1px` + `background-image`
+      的**两端渐隐**细线（`transparent → hsl(var(--border)) 12% → 88% → transparent`）。
+    第一版是「两端各内缩 0.5rem + `hsl(var(--border) / 0.6)`」，问题是行线仍在跟页眉那条**比长短**
+    （硬端点对硬端点），层级是黏的；改成渐隐后行线是"一段化开的毛发线"，跟通栏实线在**质感**上就分开了。
+    顺带两处：行距放大到 `0.68rem/0.6rem`、用伪元素而不是 `border-top`（`.deck` 是圆角盒子，
+    `border-top` 会跟着圆角拐弯；而且渐变也画不进 border）。**别把它改回 `border-top`**。
+    这两条外部依据（2026-10 查过）：
+    * Material 3 的 divider 指南：full-width divider 分隔不同 section，inset divider 分隔同一
+      section 内的条目（<https://m3.material.io/components/divider/guidelines>）—— 我们的行是
+      "同一区块内的条目"，所以线不接地、不撞边缘；
+    * iOS 的 `UITableViewCell.separatorInset`：表格分隔线从**内容左边缘**开始、不到屏幕左边缘
+      （<https://developer.apple.com/documentation/uikit/uitableviewcell/separatorinset>），同一个思路；
+    * Primer 的 action list：条目分隔线**只在多行条目（带描述）时才建议用**，并提醒「用分隔线时
+      同时把 item 尺寸放大有助可读性，别只增加视觉噪音」
+      （<https://primer.github.io/design/components/action-list/>）—— 我们一行三行文字（标题/副标题/
+      元信息），所以保留细线是有依据的，行距也据此放大了一档。
+    * 参考站（<https://tortrixx.pages.dev/workspace>）**一根分隔线都没有**：它的 `<li>` 只有
+      `space-y-2 sm:space-y-1` 的小间距，4 个分组各自是 `rounded-lg border border-transparent
+      hover:border-secondary hover:bg-blue-50/80 hover:shadow` 的卡片（`mb-3` 隔开）。
+      它敢不用线，是因为每条只有一两行、靠间距就够；我们三行文字用间距会糊，所以取"渐隐细线"这条
+      中间路线 —— 保留信息结构，但去掉表格感。
+    行内的三级层次（2026-10 用户问「页数/大小会不会抢标题注意力」，量过之后调的）：
+    无头 Chrome 取到的计算样式是**标题 16px/400、副标题 14px/400、元信息 12px/400** ——
+    三级只差 2px、全是 regular，层级完全靠颜色撑着；于是一行里"最有形状"的东西变成了
+    那两个 1px 描边胶囊。**改之前量过：当时整页带 1px 边框 + 圆角的元素只有这些胶囊**
+    （当时站点 2 套 = 4 个，每套 2 个线性增长；主题按钮 `.icon-btn` 是 `border: 0`、GitHub
+    链接也没有边框），所以它们不只是"数量最多"，而是**全页唯一一类封闭描边图形**，标题自然
+    抢不过；改完之后全页是 0 个。（别写死套数：这里曾经写成"12 套 = 24 个"，而站点当时只有
+    2 套 —— 数字要能当场量出来。）
+    两处一起改：
+    * `.deck-title` → **1.125rem（18px）/ weight 500**（字重见上面那条：本字体栈里 600 就是 bold，
+      用户明确说"过粗"，所以写 500＝意图 medium、本机落 regular），标题靠字号 + 纯黑与灰色拉开；
+    * 元信息去掉胶囊的**边框与内边距**，退化成一行淡色规格文字 `49 页 · 748 KB · 26-09-30.pdf`
+      （分隔点用 `.badge + .badge::before` / `.badge + .file::before` 生成，所以**不用动 workflow**；
+      workflow 里那个 class 名仍叫 `badge`，但它现在就是个普通 span —— 改名要动 YAML =
+      触发全量重编、还会让当天缓存作废，不值当）。
+      去掉胶囊后**分隔点从"装饰"变成了"承重"**（原来分组的活由那两个盒子干）：它是
+      `hsl(var(--muted-foreground) / 0.55)`，实测浅色 **#B2B2B2 = 2.12:1**、深色
+      **#5E5E5E = 3.05:1** —— 浅色下它几乎只是一点空气（真正分开三项的是 0.5rem 左右留白），
+      深色下反倒比浅色清楚。这是**有意留着的**：`·` 是纯装饰、不承载可读内容，不适用 3:1 的
+      非文本对比要求，而这一页的方向是"少一点墨"。真觉得三项挨得太近，加法只有一种 ——
+      把它提到满色 muted（浅 4.74:1 / 深 7.85:1）；**不要**为此把胶囊加回来，
+      那是把一个装饰问题换回一个层级问题。
+    **减重不能靠把颜色调淡**：浅色模式下 muted `#737373` 对白底是 **4.74:1**，刚过 WCAG AA 的
+    4.5:1（深色 7.85:1）—— 能去掉的只有装饰（描边、内边距），不是对比度。动这三级的字号/颜色前先算一遍。
+    一个连带的取舍，改之前先想清楚：**hover 从「灰块包住内容」回到「整行」**。贴合式灰块是②
+    那版在**无分隔线的浮动卡片**里成立的做法；一旦有了分隔线，高亮块右边缘和分隔线右边缘对不齐
+    就是"脏"。所以 `.deck` 是 `width: 100%`，和分隔线共用同一条右边界。
+    改分隔线/版式后记得同步门禁 ⑩（它钉顺序，并顺手钉住"日期不再渲染"）。
   无障碍上另有两条硬约定（2026-10 补齐）：
   - **装饰性 SVG 一律 `aria-hidden="true"`**：背景网格（`.bg-grid`）、主题按钮里的三个图标、
     GitHub 图标、卡片上的「外链」小箭头。它们的可访问名由外层承担（按钮/链接的 `aria-label`、
     卡片标题的可见文本），SVG 自己不提供名字，留着只会让读屏软件多念一句「图形」。
     注意卡片里那个箭头 SVG 是**在 workflow 的 heredoc 里**生成的（改它要动 YAML）。
-  - 头像 `img` 显式写 `width="80" height="80"`（与 CSS 一致）：样式表万一没生效也不会撑破布局。
+  - 头像 `img` 显式写 `width="64" height="64"`（与 CSS 一致）：样式表万一没生效也不会撑破布局。
   另外 `target="_blank"` 的链接都带 `rel="noopener noreferrer"`（`noreferrer` 本身就蕴含
   `noopener`，写全是为了不依赖这条蕴含关系；Lighthouse 的「跨源跳转安全」审计认这两者之一）。
 - **页脚位置**：`body` 是 `display: flex; flex-direction: column`（已有 `min-height: 100vh`），
@@ -344,9 +473,11 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
     查这类「明明写了 display:none 却还在」的问题，**别只看 CSS 有没有写对**：
     用无头 Chrome 跑一段探针，对三种模式分别 `getBoundingClientRect()` 看谁不是 0×0，
     一眼就能定位（当时就是靠它确认 `dark` 下 sun=22×22、moon=18×18 同时存在）。
-    注意本机 headless 默认 `prefers-color-scheme: dark`，要截浅色得显式
-    `--blink-settings=preferredColorScheme=1`；截图前还要关掉 `.fade` 的入场动画，
-    否则元素是 `opacity: 0`，截出来一片空白（会误判成"没渲染"）。
+    注意 headless 的 `prefers-color-scheme` 是**跟着系统走**的（本机两次实测结果就不一样：
+    写过「默认 dark」，2026-10 再测又是 light），别假设固定值 —— 要哪种就在截图前显式定：
+    浅色 `--blink-settings=preferredColorScheme=1`，深色则在 `</body>` 前注入
+    `document.documentElement.classList.add("dark")`（放在 head 里会被页面自己的 JS 覆盖）。
+    截图前还要关掉 `.fade` 的入场动画，否则元素是 `opacity: 0`，截出来一片空白（会误判成"没渲染"）。
   - 注意：**别用「实心圆 + 月牙挖空」那种自创路径**画半明半暗——在 24 网格里实心圆会把
     挖空盖掉，渲染出来就是一坨黑圆（无头 Chrome 渲染预览才看出来）。
   - `light` / `dark`：用户明确选过才写进 `localStorage.theme` 固定下来；回到 `auto` 时
@@ -415,13 +546,15 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
 
 ### 运维备忘
 
-- **换默认分支**（比如 `main` → `master`）要一起改 workflow 里**全部 6 处**：顶部的
-  `branches:` 触发器，4 处 `if`（`verify`、`build` 各一处 `github.event.deleted != true`；
-  `deploy`、`release` 各一处分支判断），以及增量编译判断里的
-  `[ "$GITHUB_REF" = "refs/heads/main" ]`。
-  漏掉最后那处不会报错，但每次都退化成全量编译。用
-  `grep -n 'branches:\|refs/heads/main\|event.deleted' .github/workflows/build-and-deploy.yml`
-  全部找出来改（改 `deploy`/`release` 时注意别把 `verify`/`build` 的删除防护一起改掉）。
+- **换默认分支**（比如 `main` → `master`）：要改的是**引用分支名的 5 处**（2026-10 数过）——
+  `:25` 的 `branches:` 触发器、`:182` 缓存恢复步的 `github.ref == 'refs/heads/main'`、
+  `:224` 增量编译基准判断、`:525` `deploy` 的 `if`、`:553` `release` 的 `if`
+  （行号会随插步骤漂移，**按下面的 grep 找、别背行号**）。
+  漏掉 `:224` 那处不会报错，但每次都退化成全量编译。
+  **别把另外 3 处 `github.event.deleted != true`（`verify`/`build`/`release`）也算进来** ——
+  那是「删除 tag/分支也会触发 push 事件」的防护，跟分支名叫什么无关，改分支名时不用动它们。
+  用 `grep -n "branches:\|refs/heads/main\|event.deleted" .github/workflows/build-and-deploy.yml`
+  全部列出来逐个判断（曾经写成「全部 6 处」并把 3 处删除防护算进去、同时漏掉缓存那处）。
 - **`deploy` 报 Pages 未启用**：Settings → Pages → Build and deployment → Source 选
   **GitHub Actions**。
 - **某套幻灯片编译失败**：站点与 Release 都会整次跳过，不会发布残缺内容；日志里会指出
@@ -440,8 +573,8 @@ typst compile --format png --pages 6 main.typ '/tmp/p-{p}.png'
 # 本地 Typst 版本应与 workflow 的 TYPST_VERSION 一致（当前 0.15.1）
 
 # 本地跑门禁（CI 里也是同一条命令；改完 workflow 务必先本地过一遍）
-bash verify-site.sh            # 只做静态部分（28 项，含 Release/tag 逻辑，几秒）
-bash verify-site.sh --build    # 再加七条编译路径（共 80 项），和 CI 门禁完全同一条命令
+bash verify-site.sh            # 只做静态部分（29 项，含 Release/tag 逻辑，几秒）
+bash verify-site.sh --build    # 再加 ①~⑩ 的编译路径（共 84 项），和 CI 门禁完全同一条命令
 
 # 查看线上状态
 gh run list --repo tortrixx/slides
@@ -452,15 +585,19 @@ gh api repos/tortrixx/slides/releases --jq '.[].tag_name'
 **本地预览首页**（模板 + 生成步骤）：
 
 ```bash
-# 先按 §6 第 1 步把 workflow 脚本抽到 /tmp/wf-scripts，再跑「生成导航页」那一步：
-RUNNER_TEMP=/tmp/rt BUILD_DIR=build RELEASE_TZ=Asia/Shanghai \
-  bash /tmp/wf-scripts/build-5.sh
-# 是 build-5.sh（生成导航页），不是 build-4.sh（编译 PDF）—— 编号对应见 §6 第 4 步。
+# 先按 §6 第 1 步把 workflow 脚本抽到 /tmp/wf-scripts，再跑「生成导航页」那一步。
+# **按内容挑，别认编号**：现在的导航页是 build-6.sh、编译步是 build-5.sh，而 workflow 插一步
+# 编号就整体错位（§6 第 4 步就是这么要求的）：
+NAV="$(grep -l '<!--SLIDES-->' /tmp/wf-scripts/*.sh)"
+RUNNER_TEMP=/tmp/rt BUILD_DIR=build RELEASE_TZ=Asia/Shanghai bash "$NAV"
+# 注意 RUNNER_TEMP 目录得先 mkdir -p（脚本往那里写 slides-items.html）。
 # 这一步已不需要 GITHUB_SHA（页脚不再显示提交号）。
 # 然后用无头 Chrome 截图看效果。两个坑：
-#   1) headless 默认 prefers-color-scheme: dark —— 想截浅色要显式 remove("dark")
+#   1) headless 的 prefers-color-scheme 跟随系统（本机实测过 dark 也实测过 light）——
+#      想固定哪个主题，就在截图前注入 html.classList.add("dark")（页面自己的 JS 会按
+#      matchMedia 覆盖 class，所以要放在 </body> 前）；
 #   2) 入场动画带 fill-mode: both，t=0 时元素是 opacity:0 —— 截图前注入
-#      .fade{animation:none;opacity:1}，否则截出一张空页
+#      .fade{animation:none;opacity:1}，否则截出一张空页（**不是**页面没渲染）
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new \
   --user-data-dir=/tmp/cprof --window-size=1100,1250 \
   --screenshot=/tmp/shot.png file:///path/to/index.html
@@ -472,28 +609,46 @@ CI 逻辑全在 YAML 的 `run: |` 里，改完不能只靠肉眼。**`verify-sit
 （`verify` job 跑 `--build`），本地可以先跑一遍再推：
 
 ```bash
-bash verify-site.sh            # 静态检查 + Release/tag 逻辑（28 项，几秒，不需要 typst）
-bash verify-site.sh --build    # 再加七条编译路径（共 80 项），和 CI 门禁完全同一条命令
+bash verify-site.sh            # 静态检查 + Release/tag 逻辑（29 项，几秒，不需要 typst）
+bash verify-site.sh --build    # 再加 ①~⑩ 的编译路径（共 84 项），和 CI 门禁完全同一条命令
 ```
 
-当前基线：`--build` 全绿 = **80 项通过**（静态 28 + 编译路径 52），覆盖这些路径：
-① 冷启动全量（含 `assets/icon.png` 确实进了 `build/`，以及 COUNT/META 两个占位符**真的注入了**）
+当前基线：`--build` 全绿 = **84 项通过**（静态 29 + 编译路径 55），覆盖这些路径：
+① 冷启动全量（含 `assets/icon.png` 确实进了 `build/`，以及 SLIDES / META 两处**真的注入了**：
+卡片数、页脚时间戳；**三个占位注释在产物里一个都不许残留**（SLIDES / COUNT / META 一起 grep ——
+COUNT 现在模板里没用，所以只查残留）。
+这条以前是「页面 `h1` 里的 count 胶囊是个数字」，随标题从 h2 搬到 h1、又在 2026-10 跟着套数一起
+被删掉，改了两次 —— 现在的写法不依赖任何标题写法，覆盖面反而更宽：占位符被改名/拼错时
+那段内容会**静默消失**，而 HTML 注释在页面上根本看不见，不钉就完全没有症状）
 ①b **HTML 转义**：造一个标题含 `& < >` 的 deck，断言产物里是实体且没有原始标签（转义回归是注入风险）
 ② 只改一个 deck 的增量
 ②b **非 ASCII 文件夹名**的增量必须重编那一套（钉住 `core.quotePath=false`，见 §7）
 ③ 删除某套后清理残留 PDF ④ 某套编译失败必须 `exit 1`
 ⑤ 文件夹名非法必须 `exit 1`（空格）；⑤b **点号开头**的目录必须被拒；⑤c **含换行**的目录名必须被拒
 ⑥ 一套都没有必须 `exit 1`
-⑦ 导航页边界：读不到 `/Count` 时**不渲染页数胶囊**（能读到时要渲染出「N 页」）、残留（含隐藏）
+⑦ 导航页边界：读不到 `/Count` 时**不渲染页数那一项**（能读到时要出现「N 页」）、残留（含隐藏）
 文件被清掉而 `.build-stamp` 保留、`BUILD_DIR` 的危险取值（空/`/`/`..`/`./`/`.//`/绝对路径/含 `..`/
 含空格）必须被拒而 `build`、`slides/build` 必须放行
 ⑧ Release/tag 逻辑（stub 掉 `gh`）：三种入口算出的 tag/managed、not found→`exists=false`、
 403→重试后 fail closed、`RELEASE_VIEW_RETRIES=abc` 不许静默降级、机器标记决定 `ours`、
 说明里的 tag 被整体百分号编码、说明末尾带标记
+⑧b **生成 Release 说明**那步也真跑一遍：tag 里的空格/括号/`#` 必须整体百分号编码、说明里列出 PDF、
+末尾带机器标记
 ⑧c 「只更新附件」那步走 `gh release upload --clobber`（不用 action：它 PATCH release 会 403）、
 没有 PDF 时必须 `exit 1`
 ⑨ 事件维度（用两套 1 页 A4 的极小夹具）：main push + stamp 匹配 → 增量；TYPST_VERSION 失配 /
 workflow_dispatch / 非 main push → 全量重编。
+⑩ 列表顺序（最新在前）：夹具里造三套 deck —— `zz-old`（提交日期 2020，名字靠后）、`aa-new`（2026，
+名字靠前）、`mm-nodate`（**故意不提交**）。断言产物的 href 顺序正好是 `aa-new zz-old mm-nodate`
+（日期倒序、无日期排最后；名字顺序与日期顺序**故意相反**，所以退回 glob 排序必挂），
+外加一条反面对照：产物里不该再出现 `class="lede"`（日期只用于排序、不上页面）。
+这两条做过对抗验证：把 `-k1,1r -k2,2` 改成 `-k1,2` 后 ⑩ 直接变红（导航页那步崩了，href 列表为空）。
+⑪ 样式表花括号平衡（静态）：`<style>` 里 `{` 与 `}` 必须一样多。**多一个（或少一个）`}` 不报错、
+不白屏，只会把它后面的规则静默吞掉** —— 2026-10 真踩过：一段重复的注释末尾多带了一个 `}`，
+把紧跟其后的 `@media (min-width: 640px) { .page-title { margin-left: 1.5rem } }` 整块吃掉，
+桌面端 h1 与头像**贴在一起**（无头 Chrome 实测 gap 0.0px，修好是 24px）；页面照样渲染、
+CSSOM 也不抛错（只是 cssRules 从 51 悄悄变成 50），截图极易看漏。CI 里没有浏览器、这类没有
+运行时替代品，所以用静态计数钉住（统计前先去掉 `/* … */` 注释）。
 
 **为什么这个门禁值得存在**：这些守的都是**静默失效**的不变量 —— stamp 基准错了会长期复用
 旧 PDF、`core.quotePath` 会让中文名 deck 永不重编、护栏失效会做出坏链接、失败没 `exit 1`
@@ -507,7 +662,7 @@ workflow_dispatch / 非 main push → 全量重编。
   写死过 `TYPST_VERSION`，后果实测很严重：workflow 一升级版本号，脚本造的 stamp 里的版本就和
   真正会写的那份不一致 → 走进「编译环境变了 → 全量」分支 → ②③ 的增量断言全挂。
   实测对比（把 workflow 的版本改成 9.9.9）：**写死版 2 通过 / 17 失败（exit 127）**，
-  读 env 版 **19 通过 / 0 失败**（当时还没加 env 断言，现在是 80 项）。这类假红比漏报更糟 —— 它会诱使人把测试改松。
+  读 env 版 **19 通过 / 0 失败**（当时还没加 env 断言，现在是 84 项）。这类假红比漏报更糟 —— 它会诱使人把测试改松。
 - **typst 包缓存要显式指到临时目录**：脚本默认 `TYPST_PACKAGE_CACHE_PATH="$TMP/typst-pkg"`
   （外部设了就尊重外部值）。typst 默认写 `$HOME`，HOME 不可写时每套 deck 都会报
   `failed to create temporary package directory` —— 看起来像 deck 坏了，是典型假红
@@ -547,7 +702,8 @@ workflow_dispatch / 非 main push → 全量重编。
   跳过重编 —— 门禁反而制造了它本该防的那种不一致。
 - `build` 靠 `needs: verify` 依赖它，所以门禁红了站点和 Release 都不会动（fail closed）。
 - 门禁会自己触发全量重编：workflow 文件哈希进了 stamp，所以**改 workflow 必然全量编译**，
-  而门禁又额外编译约 5 遍。这个成本只落在「改了 workflow」的 push 上，日常改 deck 不受影响。
+  而门禁自己会把编译步真跑 **16 次**（每次编夹具里的若干套，见 `grep -c 'run_compile ' verify-site.sh`）。
+  这个成本只落在「改了 workflow」的 push 上，日常改 deck 不受影响。
 - 门禁 job 也装了字体（和 build 同一套）。脚本要真编译含中文的 deck，字体齐全才能保证
   不因环境差异假红。注意 **`--font-path` 是追加、不是限制**（实测带空目录时字体数不变：
   394 → 394），所以没法用它模拟「没装字体」来验证这件事。
@@ -604,7 +760,7 @@ workflow_dispatch / 非 main push → 全量重编。
   凡是拿 git 输出的路径做字符串比较的地方，都要先想一遍「非 ASCII 会不会被转义或加引号」。
 - **`set -euo pipefail` 下，命令替换里的管道失败会终止整个步骤**：生成导航页那步读 `/Count` 的
   `pages="$(… | grep -o … | tail -1)"` 在「读不到」时 grep 返回 1 → 整步退出，与注释里承诺的
-  「渲染成空胶囊」正好相反（部署会被整个跳过）。已补 `|| true`。同一步里新增命令替换时留意。
+  「不渲染页数那一项」正好相反（部署会被整个跳过）。已补 `|| true`。同一步里新增命令替换时留意。
 - **`printf … | grep -q` 在 `pipefail` 下会把「匹配成功」变成「失败」**（2026-10 实测，严重）：
   `grep -q` 命中即退出，若左侧数据超过管道缓冲（Linux 64 KiB，约上千条路径），printf 撞 EPIPE
   返回 141，`set -o pipefail` 让整条管道算失败 —— 于是 `if ! printf … | grep -qF …` 里的 `!`
@@ -678,6 +834,7 @@ workflow_dispatch / 非 main push → 全量重编。
   本次重编的 PDF，或定期 `gh release delete --cleanup-tag` 清掉旧的日期版本。
 - `setup-typst@v5` 与 `softprops/action-gh-release@v3` 目前按主版本号引用（可读性好、自动收补丁）。
   若要更强的供应链保证，可以把这两个第三方 action 固定到 commit SHA，并让 Dependabot 升级。
-- 首页的标题层级：`h1` 是标语，`h2` 是 `Slides`；改动时别把唯一的主标题弄丢。
+- 首页的标题层级：全页**只有**一个 `h1`（顶栏里的 `Slides`，`.page-title`），没有标语、没有区块 `h2`
+  （见 §4「首页视觉」）；以后若分组，组标题用 `h2`。**改动时别把唯一的 h1 弄丢**。
 
 <!-- tortrixx/slides · 仓库约定见 AGENTS.md -->

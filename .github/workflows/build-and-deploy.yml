@@ -7,7 +7,7 @@
 #   首页（自动生成的导航页）→  https://<用户名>.github.io/<仓库名>/
 #
 # 四个 job 各司其职，权限互不重叠：
-#   verify  → 门禁：跑 verify-site.sh --build（七条路径）            （contents: read）
+#   verify  → 门禁：跑 verify-site.sh --build（①~⑩）                  （contents: read）
 #   build   → 装字体 + 编译 PDF（增量）+ 生成导航页 + 上传产物       （contents: read）
 #   deploy  → 把 build/ 目录发布到 GitHub Pages                     （pages/id-token: write）
 #   release → 按日期发版并创建 Release，附上全部 PDF                 （contents: write）
@@ -49,7 +49,7 @@ jobs:
   #
   # 为什么值得单开一个 job 而不是塞进 build：这段 CI 逻辑里有几个**静默失效**的不变量
   # ——stamp 基准、文件夹名护栏、编译失败必须 exit 1、删了 deck 要清残留。它们破了不会
-  # 报错，只会安静地发布残缺内容或复用旧 PDF。verify-site.sh --build 真跑七条路径来守它们。
+  # 报错，只会安静地发布残缺内容或复用旧 PDF。verify-site.sh --build 真跑 ①~⑩ 来守它们。
   #
   # 为什么不塞进 build 的步骤里：build 最后会写 .build-stamp。若「编译 → 写 stamp →
   # 门禁失败」这个顺序成立，stamp 已经落盘，下次 push 会以为编译过了而跳过重编 ——
@@ -63,7 +63,7 @@ jobs:
     name: 校验 CI 逻辑（门禁）
     runs-on: ubuntu-24.04
     if: github.event.deleted != true
-    # 这个 job 会自己编译 6 次以上（七条路径里的多数），给个上限免得异常时一直挂着
+    # 这个 job 会把编译步真跑 16 次（①~⑩ 里的多数），给个上限免得异常时一直挂着
     timeout-minutes: 10
     steps:
       - name: 检出仓库
@@ -377,6 +377,27 @@ jobs:
           : > "$items"
           count=0
 
+          # ---------- 1a) 先定顺序：最新改动的排最前 ----------
+          # 顺序 = 该 deck 最后一次提交的日期（%cs，YYYY-MM-DD）倒序；同一天按文件夹名升序兜底；
+          # 拿不到日期的（浅克隆 / 从未提交）排最后。日期**只用来排序，不渲染到页面上**。
+          # 为什么要显式排：原来直接 `for dir in slides/*/`，用的是 bash 的 glob 顺序 —— 那是
+          # 「当前 locale 下的字典序」，跟改没改无关，而且**中文名的先后会随 locale 变**
+          # （实测同一组名字：C.UTF-8 把中文排最后、en_US.UTF-8 排最前、zh_CN.UTF-8 又排最后），
+          # 等于顺序既没有意图、也不稳定。这里再用 LC_ALL=C 固定兜底比较，两个不确定性一起消掉。
+          # checkout 是 fetch-depth: 0（增量编译本来就需要完整历史），所以 git log 拿得到真实日期。
+          deck_list="$RUNNER_TEMP/slides-order.tsv"
+          : > "$deck_list"
+          for dir in slides/*/; do
+            [ -f "${dir}main.typ" ] || continue
+            name="$(basename "$dir")"
+            [ -e "$BUILD_DIR/$name.pdf" ] || continue
+            # 该路径没有任何提交时 git log 退出码仍是 0、输出为空（已实测），所以不需要兜底
+            modified="$(git log -1 --format=%cs -- "$dir")"
+            # 空日期换成 0000-00-00 再进文件：`read` 会吃掉行首的 IFS 空白，直接写空值会把
+            # 「空日期」那一行解析错位（第一个字段变成文件名）。倒序排序时 0000-00-00 天然在最后。
+            printf '%s\t%s\n' "${modified:-0000-00-00}" "$name" >> "$deck_list"
+          done
+
           # 取 main.typ 里 config-info 的 title / subtitle。
           # title 取不到时退回文件夹名；subtitle 取不到（含 subtitle: [] 和 A4 文档）时
           # 卡片**不渲染**那行描述，而不是塞一句默认文案 —— 少一行说明总好过一句假话。
@@ -400,17 +421,19 @@ jobs:
             sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g' -e "s/'/\&#39;/g"
           }
 
-          for dir in slides/*/; do
-            [ -f "${dir}main.typ" ] || continue
-            name="$(basename "$dir")"
+          # 按排好的顺序生成卡片（最新在前）。用 while read 而不是 glob：glob 的顺序改不了。
+          while IFS=$'\t' read -r modified name; do
+            # 占位日期换回空串（写成一行的 if，别写 `[ … ] && x=`：那种写法在 set -e 下
+            # 会留下非零退出码，落在函数/脚本末尾时会把整步判成失败）
+            if [ "$modified" = "0000-00-00" ]; then modified=""; fi
             pdf="$BUILD_DIR/$name.pdf"
-            [ -e "$pdf" ] || continue
             count=$((count + 1))
+            main_typ="slides/$name/main.typ"
 
-            title="$(pick "${dir}main.typ" title)"
+            title="$(pick "$main_typ" title)"
             [ -n "$title" ] || title="$name"
 
-            subtitle="$(pick "${dir}main.typ" subtitle)"
+            subtitle="$(pick "$main_typ" subtitle)"
 
             bytes="$(wc -c < "$pdf" | tr -d ' ')"
             # 1 KB 以下显示 B；不到 1 MiB 的用 KB（封顶 1023，免得 1048575 被四舍五入成 "1024 KB"）
@@ -431,6 +454,7 @@ jobs:
             title_html="$(printf '%s' "$title" | escape)"
             name_html="$(printf '%s' "$name" | escape)"
             size_html="<span class=\"badge\">${size}</span>"
+            # 注意：$modified 只用于 1a) 的排序，**不渲染**（见那边的注释）。
 
             # 副标题为空（没写 / subtitle: [] / A4 文档）时整行都不输出。
             # 用变量而不是「if 里再写一遍 cat <<HTML」，是为了让卡片结构在整个脚本里只有一份。
@@ -445,7 +469,6 @@ jobs:
             # 卡片结构对应 index.template.html 里的 .deck 样式
             cat <<HTML >> "$items"
                   <div class="deck fade" style="--i: $count">
-                    <span class="bar"></span>
                     <div class="deck-main">
                       <a class="deck-title" href="${name_html}.pdf" target="_blank" rel="noopener noreferrer">
                         ${title_html}
@@ -459,7 +482,7 @@ jobs:
                     <span class="beam"></span>
                   </div>
           HTML
-          done
+          done < <(LC_ALL=C sort -t "$(printf '\t')" -k1,1r -k2,2 "$deck_list")
 
           # ---------- 2) 把生成结果套进模板 ----------
           # 只写「最后更新」：这是**构建**时间，不是每套幻灯片的内容时间（改一套 deck 也会

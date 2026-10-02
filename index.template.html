@@ -5,6 +5,12 @@
     <!--
       站点首页模板。
       构建时 workflow 会替换三处占位注释（SLIDES / COUNT / META），产物是 build/index.html。
+      **本文件里千万别写出占位符的原文**（SLIDES / COUNT / META）：workflow 的 awk 是**按行**
+      替换、不认 HTML 注释，写出原文的那一行会被整行换掉（SLIDES 那处 → 整行变成卡片列表、
+      塞进注释中间；COUNT 那处 → 就地变成数字）。真发生过：本注释里写过 COUNT 的原文，
+      产物里那句成了「注意 2 现在模板里没有用了」。所以下面只写名字、不写原文。
+      COUNT 现在**模板里没有用到**（标题旁的套数已去掉），workflow 的替换规则留着 ——
+      想恢复显示就把它写回 h1 里，不用碰 YAML。
       其中 SLIDES 是服务端渲染出来的幻灯片卡片，所以不依赖 JS；JS 只负责深浅色。
       主题是三态循环，右上角按钮依次切 auto → 浅色 → 深色 → auto：
         * auto（默认）：每次加载都重新读浏览器的 prefers-color-scheme，系统切换时实时跟随；
@@ -154,6 +160,10 @@
       }
 
       /* ---------- 顶栏 ---------- */
+      /* 顶栏 = 头像 + 页面主标题（h1）+ 右上角按钮，一行（窄屏纵向堆叠）。
+         原来这里是「头像 + 标语（Less noise, more signal.）」一行，下面再单独一行 `h2 Slides`；
+         去掉标语、把 `Slides` 提上来当 h1 的理由见 AGENTS.md「首页视觉」。
+         **别把唯一的 h1 弄丢**（无 h1 对读屏与搜索都不友好），要改标题就改 `.page-title` 这一处。 */
       header {
         margin-bottom: 1.25rem;
       }
@@ -168,13 +178,14 @@
       @media (min-width: 640px) {
         .head-row {
           flex-direction: row;
-          align-items: flex-end;
+          /* 居中对齐：80px 的头像和一行标题按底对齐会显得标题在往下掉 */
+          align-items: center;
           gap: 0;
         }
       }
       .avatar {
-        height: 80px;
-        width: 80px;
+        height: 64px;
+        width: 64px;
         flex: none;
         border-radius: 9999px;
         transition: transform 0.3s ease;
@@ -182,13 +193,27 @@
       .avatar:hover {
         transform: rotate(180deg);
       }
-      .tagline {
+      /* 页面主标题（h1）。字号比原来的区块标题大一档，因为现在它就是这一页的标题。 */
+      .page-title {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
         margin: 0;
-        font-size: 1.25rem;
+        font-size: 1.5rem;
+        /* 字重 **500 = 意图 medium**：这套字体栈只有 regular + bold 两档（实测 400 与 500
+           渲染完全一致、600 与 700 都是 bold），medium 在这套字体里根本不存在。写 500 在本机
+           落 regular，将来若自持 Roboto Mono Variable 就自然变成真 medium。
+           **别再改回 600**（在当前环境里就是 bold，用户明确说"过粗"了）—— 实测数据与自持
+           字体的三步做法都在 AGENTS.md「首页视觉」。 */
         font-weight: 500;
+        /* **不要给标题加 text-decoration: underline**：① 参考站全站没有 underline，而且标题
+           下方已经有 .head-row 的通栏 border-bottom 收口，再加是重复装饰；② 真踩过的坑 ——
+           `.page-title` 是 flex 容器，里面的 `.count` 会被 **blockify**，于是祖先的下划线会
+           **传播进后代**、后代写 `text-decoration: none` 撤不掉（用户报过"Slides 和 2 都带
+           下划线"）。真要加，只能把文字包进内层 `<span>` 再把下划线加在它身上。 */
       }
       @media (min-width: 640px) {
-        .tagline {
+        .page-title {
           margin-left: 1.5rem;
         }
       }
@@ -268,51 +293,57 @@
         flex-direction: column;
         gap: 1.25rem;
       }
-      h2 {
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-        margin: 0 0 0.75rem;
-        padding-bottom: 0.75rem;
-        font-size: 1.125rem;
-        font-weight: 500;
-        text-decoration: underline;
-        text-underline-offset: 4px;
-      }
-      .count {
-        /* inline-block 能挡住父级 text-decoration: underline 的传播 */
-        display: inline-block;
-        padding: 0 0.5rem;
-        border: 1px solid hsl(var(--border));
-        border-radius: 9999px;
-        font-size: 0.75rem;
-        font-weight: 400;
-        color: hsl(var(--muted-foreground));
-        text-decoration: none;
-      }
+      /* 这一页只有一个区块：主标题（h1 `Slides`）在顶栏，这里**不再有区块标题 `h2`**。
+         以后若真按年/主题分组，再给每组加一条 h2（字号 1.125rem 一档，比主标题小）。
+         标题旁那个套数胶囊（`.count`）2026-10 跟着套数一起去掉了；要恢复就照当年写回来：
+         `display: inline-block; padding: 0 0.5rem; border: 1px solid hsl(var(--border));
+         border-radius: 9999px; color: hsl(var(--muted-foreground)); font-size: 0.75rem;`
+         **但别指望 `text-decoration: none` 能挡掉祖先的下划线**：父级是 flex 容器时这个
+         span 会被 blockify，下划线照样画进来（踩坑记录见 AGENTS.md）。 */
 
-      /* ---------- 幻灯片卡片 ---------- */
+      /* ---------- 幻灯片列表 ---------- */
+      /* 版式是「纯列表」：一行一套，行内标题/副标题/元信息，行间一条细线。三件**别改**的事：
+           * 行内不要再加色条（原站那根红条是**分组标题**的标记，按行复制就成了满屏粉条）；
+           * hover 必须是**整行**（`.deck` 是 `width: 100%`）—— 有了行线之后，贴合式灰块的
+             右边缘和行线对不齐就是"脏"；
+           * 顺序「最新在前」由 workflow 按 git 提交日期在构建时排好，**日期不上页面**
+             （它说的是"这套 deck 上次提交"，不是内容日期；真想透出"新旧"，更轻的做法是给
+             最近改过的行加个小圆点，而不是恢复整列日期）。
+         完整的历史与外部依据见 AGENTS.md「首页视觉」。 */
       .deck {
         position: relative;
         display: flex;
-        gap: 0.625rem;
         width: 100%;
-        padding: 0.5rem 0.5rem 0.375rem;
+        /* 行距比正文节奏再松一档：Primer 的 action list 明确写了「用条目分隔线时，同时把行高
+           放大一点有助于可读性」——线越清楚、行越挤，就越像表格，这是刻意防它变表格。 */
+        padding: 0.68rem 0.5rem 0.6rem;
         border-radius: var(--radius);
         transition: background-color 0.3s ease;
       }
+      /* 行与行之间一条**两端渐隐**的细线（2026-10 定稿）。
+         只能用伪元素 + `background-image`：`.deck` 是圆角盒子，`border-top` 会在两端跟着圆角
+         拐弯，而且**渐变画不进 border** —— **别改回 `border-top`**。
+         为什么是渐隐（而不是"两端各内缩 0.5rem + 半透明"）：页眉下面那条（`.head-row` 的
+         border-bottom）是**区块边界**（通栏实线、两端到头），行线只要也是"硬端点"就还在跟它
+         比长短、层级发黏；渐隐之后行线是"一段化开的毛发线"，靠**质感**分层而不是长度。
+         Material 3 / iOS `separatorInset` / Primer / 参考站这几条依据见 AGENTS.md「首页视觉」。 */
+      .deck + .deck::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 1px;
+        background-image: linear-gradient(
+          to right,
+          transparent,
+          hsl(var(--border)) 12%,
+          hsl(var(--border)) 88%,
+          transparent
+        );
+      }
       .deck:hover {
         background: hsl(var(--secondary));
-      }
-      .deck .bar {
-        flex: none;
-        width: 0.375rem;
-        border-radius: 2px;
-        background: rgb(248 113 113 / 0.6);
-        transition: background-color 0.7s ease;
-      }
-      .deck:hover .bar {
-        background: rgb(248 113 113);
       }
       .deck-main {
         min-width: 0;
@@ -321,6 +352,13 @@
       .deck-title {
         display: inline-flex;
         align-items: flex-end;
+        /* 标题要**真的像标题**：原来这里是继承正文的 16px / 400，三级（16/14/12px）全是
+           regular、层级只靠颜色撑着 —— 结果一行里"最有形状"的东西变成了两个描边胶囊
+           （见下面 .deck-meta，用户提的就是这个）。现在 18px + 500（意图 medium，理由同
+           .page-title 那条），层级由**字号 + 颜色**承担（18px 纯黑 / 14px 灰 / 12px 灰），
+           hover 再补下划线。 */
+        font-size: 1.125rem;
+        font-weight: 500;
         line-height: 1;
         text-underline-offset: 4px;
         transition: transform 0.3s ease;
@@ -349,20 +387,30 @@
       .deck:hover .deck-desc {
         color: hsl(var(--foreground));
       }
+      /* 副信息行 = 一句话的"规格说明"：`49 页 · 748 KB · 26-09-30.pdf`。
+         **别再给页数/大小加边框或胶囊**（2026-10 用户提的「别抢标题注意力」，详见 AGENTS.md
+         「首页视觉」）：整页带 1px 边框 + 圆角的元素**只有这些胶囊**（2 套 = 4 个，每套 2 个），
+         给一行"规格说明"比标题更重的形状就是层级倒挂；现在信息只由字号 + 颜色承担（都继承这里）。
+         **减重也不能靠把颜色调淡**：浅色下 muted `#737373` 对白底是 4.74:1，刚过 WCAG AA 的
+         4.5:1（深色 7.85:1），再淡就不合格 —— 能去掉的只有装饰（边框/内边距），不是对比度。
+         分隔点用相邻兄弟选择器生成：workflow 的 heredoc 里 `.badge` / `.file` 是固定 class，
+         在 CSS 里加分隔符就**不必动 YAML**；那个 `badge` 现在只是个普通 span，**别改名**
+         （改名要动 workflow → 下一次 push 全量重编）。分隔点本身只有 2.12:1（浅色 #B2B2B2），
+         是纯装饰；真嫌三项挨太近就把它提到满色（4.74:1），**不要**为此把胶囊加回来。 */
       .deck-meta {
         display: flex;
         flex-wrap: wrap;
         align-items: center;
-        gap: 0.375rem;
+        gap: 0;
         margin-top: 0.5rem;
         font-size: 0.75rem;
         color: hsl(var(--muted-foreground));
       }
-      .badge {
-        padding: 0.0625rem 0.5rem;
-        border: 1px solid hsl(var(--border));
-        border-radius: 9999px;
-        line-height: 1.5;
+      .badge + .badge::before,
+      .badge + .file::before {
+        content: "·";
+        margin: 0 0.5rem;
+        color: hsl(var(--muted-foreground) / 0.55);
       }
 
       /* ---------- hover 光边框（对应 magicui 的 BorderBeam） ---------- */
@@ -573,11 +621,16 @@
           class="avatar"
           src="icon.png"
           alt="tortrixx"
-          width="80"
-          height="80"
+          width="64"
+          height="64"
           onerror="this.remove()"
         />
-        <h1 class="tagline">Less noise, more signal.</h1>
+        <!-- 全页唯一的 h1（以前这里是标语、`Slides` 只是 h2；合并的理由见 AGENTS.md「首页视觉」）。
+             **别删掉这一处**：页面没有 h1 对读屏与搜索都不友好。
+             标题旁不再显示套数（理由同上）。要恢复：在 h1 里加回那个套数 span —— 它是 COUNT
+             的占位注释，**本文件里不能写出原文**（见文件开头那条坑）—— 并把上面那条 `.count`
+             CSS 写回去；workflow 的替换规则一直留着，不用改 YAML。 -->
+        <h1 class="page-title">Slides</h1>
         <span class="spacer"></span>
         <div class="head-actions">
           <button
@@ -639,8 +692,8 @@
 
     <main>
       <!-- ================= 幻灯片 ================= -->
+      <!-- 这一节没有自己的标题：页面标题（h1 Slides）已经在顶栏里，这里再写一遍就是重复 -->
       <section class="fade" style="--i: 1">
-        <h2>Slides <span class="count"><!--COUNT--></span></h2>
         <!--SLIDES-->
       </section>
     </main>
