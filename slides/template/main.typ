@@ -31,6 +31,7 @@
     date: datetime.today(),
     institution: [你的机构],
   ),
+  // footer-progress: false,   // 去掉底部进度条
 )
 
 // 中西文混排：Inter 负责西文，Noto Sans CJK SC 负责中文
@@ -149,7 +150,7 @@ cd slides/my-talk && typst watch main.typ
 
 两段并排用 `#cols`，列宽可以自己定：
 
-#cols(columns: 2, gutter: 2em)[
+#cols(columns: (1fr, 1fr))[
   *左边这一栏*
 
   - 第一个要点
