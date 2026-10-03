@@ -25,9 +25,9 @@
 #show: metropolis-theme.with(
   aspect-ratio: "16-9",
   config-info(
-    title: [幻灯片标题],
-    subtitle: [副标题写在这里],
-    author: [你的名字],
+    title: [title],
+    subtitle: [],
+    author: [author],
     date: datetime.today(),
   ),
   // footer-progress: false,   // 去掉底部进度条
