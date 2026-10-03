@@ -165,7 +165,11 @@
          去掉标语、把 `Slides` 提上来当 h1 的理由见 AGENTS.md「首页视觉」。
          **别把唯一的 h1 弄丢**（无 h1 对读屏与搜索都不友好），要改标题就改 `.page-title` 这一处。 */
       header {
-        margin-bottom: 1.25rem;
+        /* 1.5rem = 24px：与 `.deck` 的 padding-top 相加后，页眉线到第一行墨迹实测 42px，
+           比行距（线到两侧墨迹各 ~17px）大一档 —— 区块边界与条目之间"边界更松"。
+           改之前是 1.25rem：线到第一行只有 33.9px，而行距是 23.5px，方向正好反过来
+           （线离内容比行距还近），层级就发黏了。 */
+        margin-bottom: 1.5rem;
       }
       .head-row {
         display: flex;
@@ -173,7 +177,13 @@
         align-items: center;
         gap: 0.5rem;
         padding-bottom: 1rem;
-        border-bottom: 1px solid hsl(var(--border));
+        /* **2px，行线是 1px** —— 两条线必须"重量"不同，这是区块边界与条目分隔的分层手段。
+           原来两条都是 1px + 同色，只有"两端渐隐"这点差别（肉眼看不出来），所以页眉线看着
+           跟行线同一级（用户 2026-10 提的「显示效果也差不多」）。
+           配合 `header` 的 margin-bottom 后实测：线在 64px 头像之下 18px、到第一行墨迹
+           42px（页眉区最高的元素是头像，不是 1.5rem 的标题——按标题的行盒算会得出 30.8px，
+           那 12px 是 h1 行高里上下各约 7px 的 half-leading，不是观感距离）。 */
+        border-bottom: 2px solid hsl(var(--border));
       }
       @media (min-width: 640px) {
         .head-row {
@@ -316,7 +326,13 @@
         width: 100%;
         /* 行距比正文节奏再松一档：Primer 的 action list 明确写了「用条目分隔线时，同时把行高
            放大一点有助于可读性」——线越清楚、行越挤，就越像表格，这是刻意防它变表格。 */
-        padding: 0.68rem 0.5rem 0.6rem;
+        /* 上下内边距做成**近似相等**（15px / 14px）：行线是 `.deck + .deck::before` 画的
+           1px 线，落在上一行的 padding-bottom 与下一行的 padding-top 之间，两者不等就会
+           "线偏上"。实测（第二行带副标题、最高的一行）：线到上一行墨迹 14px、到下一行墨迹
+           18px；旧值 0.68rem / 0.6rem = 10.9px / 9.6px 时偏差更大，线明显偏上。
+           注意这两个数从 `getBoundingClientRect()` 量出来是行盒，观感差的是**墨迹**到线，
+           两者差 3–4px（12–18px 的字，行高里有 half-leading），别只按行盒调。 */
+        padding: 0.9375rem 0.5rem 0.875rem;
         border-radius: var(--radius);
         transition: background-color 0.3s ease;
       }

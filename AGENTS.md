@@ -391,8 +391,31 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
       的**两端渐隐**细线（`transparent → hsl(var(--border)) 12% → 88% → transparent`）。
     第一版是「两端各内缩 0.5rem + `hsl(var(--border) / 0.6)`」，问题是行线仍在跟页眉那条**比长短**
     （硬端点对硬端点），层级是黏的；改成渐隐后行线是"一段化开的毛发线"，跟通栏实线在**质感**上就分开了。
-    顺带两处：行距放大到 `0.68rem/0.6rem`、用伪元素而不是 `border-top`（`.deck` 是圆角盒子，
+    顺带两处：行内边距放大到 `0.9375rem/0.875rem`（15px / 14px，为什么不是对称的见下条）、
+    用伪元素而不是 `border-top`（`.deck` 是圆角盒子，
     `border-top` 会跟着圆角拐弯；而且渐变也画不进 border）。**别把它改回 `border-top`**。
+    第三轮（2026-10，用户对着浅色截图提的「页眉线与下方 PDF 的间距、和 PDF 之间的间距不同，
+    而且两条线显示效果也差不多」）—— 这一轮才把上面那两级真正做出来，量过之后的两条结论：
+    * **两条线必须"重量"不同，不能只靠"长短/渐隐"区分**：页眉线改 `border-bottom: 2px`
+      （行线仍是 1px）。两条都是 1px + 同色时，只有"两端渐隐"这点差别，放大到 2× 也几乎看不出来，
+      页眉线看着跟行线就是同一级 —— 当初"靠质感分层"的想法在 1px 尺度上不成立。
+    * **线的两侧留白也要不对称得对**：旧值 `.head-row` 的 `padding-bottom: 1rem` +
+      `header` 的 `margin-bottom: 1.25rem` 让页眉线到第一行墨迹只有 **33.9px**，而行距是
+      **23.5px** —— 线离内容比行距还近，方向正好反了。现在 `header` 的 `margin-bottom: 1.5rem`
+      （线到第一行墨迹 **42.0px** ≥ 行距），页眉"上面紧、下面松"才是区块边界该有的样子。
+      **这两个数都是"墨迹"距离**（按行盒量会多出该行 `line-height` 的 half-leading，实测那一下
+      是 +8px，所以同一个位置按 `getBoundingClientRect()` 会读到 50.0px）。换 deck 内容不同、
+      多出来的 leading 也不同 —— 比较层级时始终用同一种量法，别把两种数混着看。
+      线上方那侧：线落在 `.head-row` 的 `padding-bottom: 16px` 之下，而页眉区最高的元素是 64px 的
+      头像（比 1.5rem 的标题高 25px），所以实测**线在头像之下 18px**（按 h1 的行盒算会得出 30.8px ——
+      差异就是 h1 那 38.4px 行高里上下各约 7px 的 half-leading）。
+    * 行线那侧：`.deck` 的 `padding-top: 0.9375rem` / `padding-bottom: 0.875rem` 让行线到上一行
+      墨迹 **14px**、到下一行墨迹 **18px**（行高 19.2px 的 `line-height` 会在墨迹上下各留 ~3.6px
+      的 leading，所以 `padding` 写成 15/14 反映到墨迹上是 18/18）。旧值 `0.68rem/0.6rem`
+      差得更多，线明显偏上。
+    * 量这些值**不能只读 CSS**：`getBoundingClientRect()` 给的是行盒（含 `line-height` 的
+      half-leading），而观感是**墨迹**到线的距离，两者能差 3–4px；本轮就是先用行盒算出
+      "上 22 / 下 34、对称"，实测才发现方向反了。
     这两条外部依据（2026-10 查过）：
     * Material 3 的 divider 指南：full-width divider 分隔不同 section，inset divider 分隔同一
       section 内的条目（<https://m3.material.io/components/divider/guidelines>）—— 我们的行是
