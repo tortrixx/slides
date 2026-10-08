@@ -64,7 +64,7 @@ Key characteristics:
 == Simple Agent Architecture
 
 #align(center)[
-  #block(width: 80%)[
+  #block(width: 100%)[
     Environment  →  Sensors  →  Agent Function  →  Actuators  →  Environment
   ]
 ]
@@ -152,7 +152,7 @@ Perfect rationality is rarely possible: observations are noisy, computation is l
 A modern agent often includes a *learning element*:
 
 #align(center)[
-  #block(fill: luma(240), inset: 1em, radius: 6pt, width: 85%)[
+  #block(fill: luma(240), inset: 1em, radius: 6pt, width: 100%)[
     Performance Element + Critic + Learning Element + Problem Generator
   ]
 ]
@@ -274,8 +274,9 @@ Popular frameworks: LangChain, AutoGen, CrewAI, Semantic Kernel, etc.
 #slide[
   #set text(size: 18pt)
   #grid(
-    columns: 4,
-    gutter: 0.6em,
+    align: center,
+    columns: 2,
+    gutter: 5em,
     [*1. Observe*\ Read the task and context],
     [*2. Plan*\ Decompose the goal],
     [*3. Act*\ Call tools and APIs],
