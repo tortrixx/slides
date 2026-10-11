@@ -7,7 +7,7 @@
 #   首页（自动生成的导航页）→  https://<用户名>.github.io/<仓库名>/
 #
 # 四个 job 各司其职，权限互不重叠：
-#   verify  → 门禁：跑 verify-site.sh --build（①~⑩）                  （contents: read）
+#   verify  → 门禁：跑 verify-site.sh --build（①~⑪）                  （contents: read）
 #   build   → 装字体 + 编译 PDF（增量）+ 生成导航页 + 上传产物       （contents: read）
 #   deploy  → 把 build/ 目录发布到 GitHub Pages                     （pages/id-token: write）
 #   release → 按日期发版并创建 Release，附上全部 PDF                 （contents: write）
@@ -26,6 +26,9 @@ on:
     tags: ["v*"] # 手动推送 tag：编译 + 用这个 tag 发版本（不重新部署 Pages）
   release:
     types: [published] # 在网页上「发布 Release」时也把 PDF 补传上去
+  # PR：只跑 verify + build（门禁 + 试编译）。deploy / release 的 if 只认 push/manual/release 事件，
+  # 天然排除 PR；build 在 PR 上不恢复增量缓存（恢复步只认 main push），退化为全量编译，结果不变。
+  pull_request:
   workflow_dispatch: # 支持在 Actions 页面手动运行（只构建/部署，不发版本）
 
 env:
@@ -59,7 +62,7 @@ jobs:
   #
   # 为什么值得单开一个 job 而不是塞进 build：这段 CI 逻辑里有几个**静默失效**的不变量
   # ——stamp 基准、文件夹名护栏、编译失败必须 exit 1、删了 deck 要清残留。它们破了不会
-  # 报错，只会安静地发布残缺内容或复用旧 PDF。verify-site.sh --build 真跑 ①~⑩ 来守它们。
+  # 报错，只会安静地发布残缺内容或复用旧 PDF。verify-site.sh --build 真跑 ①~⑪ 来守它们。
   #
   # 为什么不塞进 build 的步骤里：build 最后会写 .build-stamp。若「编译 → 写 stamp →
   # 门禁失败」这个顺序成立，stamp 已经落盘，下次 push 会以为编译过了而跳过重编 ——
@@ -73,7 +76,7 @@ jobs:
     name: 校验 CI 逻辑（门禁）
     runs-on: ubuntu-24.04
     if: github.event.deleted != true
-    # 这个 job 会把编译步真跑 16 次（①~⑩ 里的多数），给个上限免得异常时一直挂着
+    # 这个 job 会把编译步真跑 16 次（①~⑪ 里的多数），给个上限免得异常时一直挂着
     timeout-minutes: 10
     steps:
       - name: 检出仓库
@@ -82,57 +85,55 @@ jobs:
           # 门禁脚本不需要推送、也不用 git 凭据，别把 token 留在 .git/config 里
           persist-credentials: false
 
-      # 先装 Typst：下面的字体步骤结尾要用 `typst fonts` 做 fail closed 断言。
-      - name: 安装 Typst
+      # 把所有 deck 的 @preview import 汇总成一个可编译的 .typ，交给下面 setup-typst 的
+      # cache-dependency-path：它对文件内容取哈希做缓存 key，缓存未命中时自己编译一遍这个文件，
+      # 把包下载进 ~/.cache/typst/packages 再整体存起来。新增/升级包 = 文件内容变 = 自动换新 key。
+      # 注意：剥掉 `: *` 绑定部分只留包地址 —— 多个 glob 绑定放进同一文件可能撞名报错，裸导入不会；
+      # themes.metropolis 这类包内相对导入不在此列（它随 touying 包一起来）。
+      - name: 汇总 @preview 依赖（包缓存的哈希输入）
+        run: |
+          set -euo pipefail
+          deps="$RUNNER_TEMP/preview-deps.typ"
+          : > "$deps"
+          grep -h -E '^[[:space:]]*#import "@preview/' slides/*/main.typ 2>/dev/null \
+            | sed -E 's/^[[:space:]]*#import "(@preview\/[^"]+)".*/#import "\1"/' \
+            | sort -u >> "$deps" || true
+          # 留一行 ASCII 正文：保证任何 Typst 版本下都可编译（此时系统字体还没装，不能放中文）
+          printf '\npackage dependencies for cache warmup\n' >> "$deps"
+          cat "$deps"
+
+      # 先装 Typst：装字体那步（复合 action）结尾要用 `typst fonts` 做 fail closed 断言。
+      - name: 安装 Typst（含 @preview 包缓存）
         uses: typst-community/setup-typst@v5
         with:
           typst-version: ${{ env.TYPST_VERSION }}
+          cache-dependency-path: ${{ runner.temp }}/preview-deps.typ
 
-      # 和 build job 装同一套：脚本要真的编译 deck（含中文），字体齐全才能保证它不会因为
-      # 环境差异而假红；代码字体（deck 的 `#show raw` 要用）也一并装上。
+      # Maple Mono 的 zip 缓存放在 job 层（actions/cache 的 post 保存语义在这里最稳），
+      # 复合 action 通过 maple-cache-hit 决定要不要重新下载；sha256 校验在 action 里照跑。
+      - name: 缓存 Maple Mono 字体 zip
+        id: maple-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/maple-mono-cache/MapleMonoNormal-NF-CN-unhinted.zip
+          key: maple-mono-${{ env.MAPLE_MONO_ZIP_SHA256 }}
+
+      # 和 build job 装同一套（同一份复合 action，只有一份实现）：门禁要真编译含中文的 deck，
+      # 字体齐全才能保证它不会因为环境差异而假红；代码字体（deck 的 `#show raw` 要用）也一并装上。
       - name: 安装模板字体（Noto Sans CJK SC / Inter / Maple Mono Normal NF）
-        run: |
-          set -euo pipefail
-
-          # ① 中文与西文走 apt。故意不装 fonts-noto-cjk-extra —— 它要额外下载约 145MB，
-          # 而模板只用到 Regular / Bold。若确实需要 Light / Medium 等更多中文字重，
-          # 把 fonts-noto-cjk-extra 加回下面的列表即可。
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends fonts-noto-cjk fonts-inter \
-            || sudo apt-get install -y --no-install-recommends fonts-noto-cjk
-          # 解压代码字体要用 unzip，个别精简镜像里没有
-          command -v unzip >/dev/null || sudo apt-get install -y --no-install-recommends unzip
-
-          # ② 代码字体：Ubuntu 源里没有 Maple Mono，从上游 Release 下固定版本（版本与哈希见文件顶部 env）。
-          # zip 与解出来的 TTF 都校验 sha256：上游改了包或下载被劫持都直接红，不会静默换掉字体。
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/maple-mono.zip" \
-            "https://github.com/subframe7536/maple-font/releases/download/${MAPLE_MONO_VERSION}/MapleMonoNormal-NF-CN-unhinted.zip"
-          echo "${MAPLE_MONO_ZIP_SHA256}  $RUNNER_TEMP/maple-mono.zip" | sha256sum -c -
-          unzip -j -o "$RUNNER_TEMP/maple-mono.zip" "MapleMonoNormal-NF-CN-Regular.ttf" -d "$RUNNER_TEMP/maple-mono"
-          echo "${MAPLE_MONO_TTF_SHA256}  $RUNNER_TEMP/maple-mono/MapleMonoNormal-NF-CN-Regular.ttf" | sha256sum -c -
-          sudo install -d /usr/share/fonts/truetype/maple-mono
-          sudo install -m644 "$RUNNER_TEMP/maple-mono/MapleMonoNormal-NF-CN-Regular.ttf" /usr/share/fonts/truetype/maple-mono/
-          rm -rf "$RUNNER_TEMP/maple-mono.zip" "$RUNNER_TEMP/maple-mono"
-
-          fc-cache -f
-
-          # ③ fail closed：这三个字族都必须真被 Typst 认出来。缺任何一个 Typst 都不报错，
-          # 只会静默回退（中文掉成方块、代码掉成 DejaVu），PDF 照样编得出来 —— 所以显式断言。
-          # 断言的是 "Maple Mono Normal NF"（deck 里写的那一个）：字体 name 表里的家族名其实是
-          # "Maple Mono Normal NF CN"，Typst 会把末尾的 "cn" 当风格后缀剥掉
-          # （typst-library/src/text/font/info.rs 的 typographic_family，SUFFIXES 里含 "cn"），
-          # 所以按 name 表原文断言会假红。
-          fonts_list="$(typst fonts)"
-          for family in "Inter" "Noto Sans CJK SC" "Maple Mono Normal NF"; do
-            grep -Fx -- "$family" <<<"$fonts_list" >/dev/null \
-              || { echo "::error::字体缺失：${family}（装字体那步没生效，PDF 会静默回退）"; exit 1; }
-          done
-
-          # 打印实际识别到的字族，方便排查（只进日志，不影响结果）
-          grep -E 'Noto Sans CJK|Inter|Maple' <<<"$fonts_list" | sort -u | head -n 10 || true
+        uses: ./.github/actions/setup-fonts
+        with:
+          maple-cache-hit: ${{ steps.maple-cache.outputs.cache-hit }}
 
       - name: 跑 verify-site.sh --build
-        run: bash verify-site.sh --build
+        run: |
+          # 让门禁复用 setup-typst 恢复的包缓存：verify-site.sh 默认把
+          # TYPST_PACKAGE_CACHE_PATH 指到它自己的临时目录（尊重外部已设的值），
+          # 不设的话上面恢复出来的缓存完全用不上、每套夹具 deck 都重新下载包。
+          # 路径与 setup-typst 内部的写法一致：$XDG_CACHE_HOME/typst/packages，
+          # runner 上 XDG_CACHE_HOME 未设，退到 ~/.cache。
+          export TYPST_PACKAGE_CACHE_PATH="${XDG_CACHE_HOME:-$HOME/.cache}/typst/packages"
+          bash verify-site.sh --build
 
   # ---------------------------------------------------------------------------
   # 1) 安装字体、编译幻灯片（增量）、准备好 Pages 站点内容
@@ -196,59 +197,44 @@ jobs:
 
           echo "BUILD_DIR=${BUILD_DIR}（归一化后 '${norm}'） TYPST_VERSION=${TYPST_VERSION} RELEASE_TZ=${tz}"
 
-      # 先装 Typst：下面的字体步骤结尾要用 `typst fonts` 做 fail closed 断言。
-      - name: 安装 Typst
+      # 同 verify job：把所有 deck 的 @preview import 汇总成一个可编译的 .typ，
+      # 给 setup-typst 的 cache-dependency-path 当缓存 key 的哈希输入（细节见 verify job 同名单步）。
+      # 这段与 verify job 逐字重复：两边漂移只会让缓存 key 不一致（多下载一次包），不影响正确性。
+      - name: 汇总 @preview 依赖（包缓存的哈希输入）
+        run: |
+          set -euo pipefail
+          deps="$RUNNER_TEMP/preview-deps.typ"
+          : > "$deps"
+          grep -h -E '^[[:space:]]*#import "@preview/' slides/*/main.typ 2>/dev/null \
+            | sed -E 's/^[[:space:]]*#import "(@preview\/[^"]+)".*/#import "\1"/' \
+            | sort -u >> "$deps" || true
+          # 留一行 ASCII 正文：保证任何 Typst 版本下都可编译（此时系统字体还没装，不能放中文）
+          printf '\npackage dependencies for cache warmup\n' >> "$deps"
+          cat "$deps"
+
+      # 先装 Typst：装字体那步（复合 action）结尾要用 `typst fonts` 做 fail closed 断言。
+      - name: 安装 Typst（含 @preview 包缓存）
         uses: typst-community/setup-typst@v5
         with:
           typst-version: ${{ env.TYPST_VERSION }}
-          # 可选优化：把 cache-dependency-path 指向一个「只含 @preview import 行」的
-          # .typ 文件即可缓存宏包（该输入只接受单个可编译的文件，不支持通配符）。
-          # 需要时见 AGENTS.md 第 8 节「可能的后续改进」。
+          cache-dependency-path: ${{ runner.temp }}/preview-deps.typ
+
+      # Maple Mono 的 zip 缓存放在 job 层（同 verify job），sha256 校验在复合 action 里照跑。
+      - name: 缓存 Maple Mono 字体 zip
+        id: maple-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/maple-mono-cache/MapleMonoNormal-NF-CN-unhinted.zip
+          key: maple-mono-${{ env.MAPLE_MONO_ZIP_SHA256 }}
 
       # 模板与 deck 里用到的字体（见 slides/*/main.typ 的 #set text 与 `#show raw`）：
       #   Noto Sans CJK SC → 中文；Inter → 西文；Maple Mono Normal NF → 代码块（raw）；
       #   New Computer Modern Math 由 Typst 自带，不用装。
-      # 不装字体也能编译成功，只是会静默回退，所以这里装完必须显式断言（见末尾 ③）。
+      # 不装字体也能编译成功，只是会静默回退，所以复合 action 装完会显式断言（fail closed）。
       - name: 安装模板字体（Noto Sans CJK SC / Inter / Maple Mono Normal NF）
-        run: |
-          set -euo pipefail
-
-          # ① 中文与西文走 apt。故意不装 fonts-noto-cjk-extra —— 它要额外下载约 145MB，
-          # 而模板只用到 Regular / Bold。若确实需要 Light / Medium 等更多中文字重，
-          # 把 fonts-noto-cjk-extra 加回下面的列表即可。
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends fonts-noto-cjk fonts-inter \
-            || sudo apt-get install -y --no-install-recommends fonts-noto-cjk
-          # 解压代码字体要用 unzip，个别精简镜像里没有
-          command -v unzip >/dev/null || sudo apt-get install -y --no-install-recommends unzip
-
-          # ② 代码字体：Ubuntu 源里没有 Maple Mono，从上游 Release 下固定版本（版本与哈希见文件顶部 env）。
-          # zip 与解出来的 TTF 都校验 sha256：上游改了包或下载被劫持都直接红，不会静默换掉字体。
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/maple-mono.zip" \
-            "https://github.com/subframe7536/maple-font/releases/download/${MAPLE_MONO_VERSION}/MapleMonoNormal-NF-CN-unhinted.zip"
-          echo "${MAPLE_MONO_ZIP_SHA256}  $RUNNER_TEMP/maple-mono.zip" | sha256sum -c -
-          unzip -j -o "$RUNNER_TEMP/maple-mono.zip" "MapleMonoNormal-NF-CN-Regular.ttf" -d "$RUNNER_TEMP/maple-mono"
-          echo "${MAPLE_MONO_TTF_SHA256}  $RUNNER_TEMP/maple-mono/MapleMonoNormal-NF-CN-Regular.ttf" | sha256sum -c -
-          sudo install -d /usr/share/fonts/truetype/maple-mono
-          sudo install -m644 "$RUNNER_TEMP/maple-mono/MapleMonoNormal-NF-CN-Regular.ttf" /usr/share/fonts/truetype/maple-mono/
-          rm -rf "$RUNNER_TEMP/maple-mono.zip" "$RUNNER_TEMP/maple-mono"
-
-          fc-cache -f
-
-          # ③ fail closed：这三个字族都必须真被 Typst 认出来。缺任何一个 Typst 都不报错，
-          # 只会静默回退（中文掉成方块、代码掉成 DejaVu），PDF 照样编得出来 —— 所以显式断言。
-          # 断言的是 "Maple Mono Normal NF"（deck 里写的那一个）：字体 name 表里的家族名其实是
-          # "Maple Mono Normal NF CN"，Typst 会把末尾的 "cn" 当风格后缀剥掉
-          # （typst-library/src/text/font/info.rs 的 typographic_family，SUFFIXES 里含 "cn"），
-          # 所以按 name 表原文断言会假红。
-          fonts_list="$(typst fonts)"
-          for family in "Inter" "Noto Sans CJK SC" "Maple Mono Normal NF"; do
-            grep -Fx -- "$family" <<<"$fonts_list" >/dev/null \
-              || { echo "::error::字体缺失：${family}（装字体那步没生效，PDF 会静默回退）"; exit 1; }
-          done
-
-          # 打印实际识别到的字族，方便排查（只进日志，不影响结果）
-          grep -E 'Noto Sans CJK|Inter|Maple' <<<"$fonts_list" | sort -u | head -n 10 || true
+        uses: ./.github/actions/setup-fonts
+        with:
+          maple-cache-hit: ${{ steps.maple-cache.outputs.cache-hit }}
 
       # 增量编译的核心：把上一次的 build/ 目录取回来。
       # 没改动的幻灯片直接复用里面的 PDF，只重新编译改动过的那些。
@@ -274,12 +260,18 @@ jobs:
           # 而**不是** github.event.before。这个区别很关键：before..GITHUB_SHA 只覆盖本次 push，
           # 一旦上一次运行失败（缓存没存下来）或两次 push 挨得很近，那一次改过的 deck 就既不在
           # diff 里、缓存里又是旧 PDF，会被一直复用成旧版本 —— 线上 PDF 与 main 不一致且不会自愈。
-          # stamp 里还带 Typst 版本与 workflow 内容的哈希：编译环境变了就整体重编。
-          # `2>/dev/null` 是本意「容忍失败」，但 CI 的 run 块由 `bash -e {0}` 执行、脚本里的
-          # `set -uo pipefail` 并不会关掉 errexit —— 不补 `|| wf_rev=""` 的话，这行失败会
-          # **静默中止整步**（rc=128、一行日志都没有）。拿不到哈希时用一个必定不匹配 stamp 的
+          # stamp 里还带 Typst 版本与「编译环境哈希」：编译环境变了就整体重编。
+          # 编译环境哈希覆盖所有会影响编译产物的文件：workflow 本身 + 装字体的复合 action
+          # （字体逻辑在 .github/actions/setup-fonts 里 —— 漏掉它的话，改字体不会触发全量重编，
+          # 那正是 stamp 要防的静默失效；门禁 ⑨b 钉着这一条）。
+          # `2>/dev/null` + 空值兜底是本意「容忍失败」：CI 的 run 块由 `bash -e {0}` 执行、脚本里的
+          # `set -uo pipefail` 并不会关掉 errexit —— 拿不到哈希时用一个必定不匹配 stamp 的
           # 值，让本次退化成全量编译（fail safe）。
-          wf_rev="$(git hash-object .github/workflows/build-and-deploy.yml 2>/dev/null | cut -c1-12)" || wf_rev=""
+          wf_hashes="$(git hash-object .github/workflows/build-and-deploy.yml .github/actions/setup-fonts/action.yml 2>/dev/null)" || wf_hashes=""
+          wf_rev=""
+          if [ -n "$wf_hashes" ]; then
+            wf_rev="$(printf '%s\n' "$wf_hashes" | git hash-object --stdin 2>/dev/null | cut -c1-12)" || wf_rev=""
+          fi
           [ -n "$wf_rev" ] || wf_rev="missing-$(date +%s)"
           stamp="$build_dir/.build-stamp"
           stamp_sha=""; stamp_ver=""; stamp_wf=""

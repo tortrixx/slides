@@ -7,7 +7,7 @@
   aspect-ratio: "16-9",
   config-info(
     title: [Intelligent Agents],
-    author: [Your Name],
+    author: [tortrixx],
     date: datetime.today(),
   ),
   footer-progress: false,
@@ -51,7 +51,7 @@
 
 An *agent* is anything that can be viewed as perceiving its environment through *sensors* and acting upon that environment through *actuators*.
 
-#text(size: 0.9em)[agent 就是一个能够通过传感器感知环境，并通过执行器对环境采取行动的实体。]
+agent 就是一个能够通过传感器感知环境，并通过执行器对环境采取行动的实体。
 
 #pause
 

@@ -162,7 +162,7 @@
       /* ---------- 顶栏 ---------- */
       /* 顶栏 = 头像 + 页面主标题（h1）+ 右上角按钮，一行（窄屏纵向堆叠）。
          原来这里是「头像 + 标语（Less noise, more signal.）」一行，下面再单独一行 `h2 Slides`；
-         去掉标语、把 `Slides` 提上来当 h1 的理由见 AGENTS.md「首页视觉」。
+         去掉标语、把 `Slides` 提上来当 h1 的理由见 docs/site-design.md。
          **别把唯一的 h1 弄丢**（无 h1 对读屏与搜索都不友好），要改标题就改 `.page-title` 这一处。 */
       header {
         /* 1.5rem = 24px：与 `.deck` 的 padding-top 相加后，页眉线到第一行墨迹实测 42px，
@@ -214,7 +214,7 @@
            渲染完全一致、600 与 700 都是 bold），medium 在这套字体里根本不存在。写 500 在本机
            落 regular，将来若自持 Roboto Mono Variable 就自然变成真 medium。
            **别再改回 600**（在当前环境里就是 bold，用户明确说"过粗"了）—— 实测数据与自持
-           字体的三步做法都在 AGENTS.md「首页视觉」。 */
+           字体的三步做法都在 docs/site-design.md。 */
         font-weight: 500;
         /* **不要给标题加 text-decoration: underline**：① 参考站全站没有 underline，而且标题
            下方已经有 .head-row 的通栏 border-bottom 收口，再加是重复装饰；② 真踩过的坑 ——
@@ -309,7 +309,7 @@
          `display: inline-block; padding: 0 0.5rem; border: 1px solid hsl(var(--border));
          border-radius: 9999px; color: hsl(var(--muted-foreground)); font-size: 0.75rem;`
          **但别指望 `text-decoration: none` 能挡掉祖先的下划线**：父级是 flex 容器时这个
-         span 会被 blockify，下划线照样画进来（踩坑记录见 AGENTS.md）。 */
+         span 会被 blockify，下划线照样画进来（踩坑记录见 docs/site-design.md）。 */
 
       /* ---------- 幻灯片列表 ---------- */
       /* 版式是「纯列表」：一行一套，行内标题/副标题/元信息，行间一条细线。三件**别改**的事：
@@ -319,7 +319,7 @@
            * 顺序「最新在前」由 workflow 按 git 提交日期在构建时排好，**日期不上页面**
              （它说的是"这套 deck 上次提交"，不是内容日期；真想透出"新旧"，更轻的做法是给
              最近改过的行加个小圆点，而不是恢复整列日期）。
-         完整的历史与外部依据见 AGENTS.md「首页视觉」。 */
+         完整的历史与外部依据见 docs/site-design.md。 */
       .deck {
         position: relative;
         display: flex;
@@ -342,7 +342,7 @@
          为什么是渐隐（而不是"两端各内缩 0.5rem + 半透明"）：页眉下面那条（`.head-row` 的
          border-bottom）是**区块边界**（通栏实线、两端到头），行线只要也是"硬端点"就还在跟它
          比长短、层级发黏；渐隐之后行线是"一段化开的毛发线"，靠**质感**分层而不是长度。
-         Material 3 / iOS `separatorInset` / Primer / 参考站这几条依据见 AGENTS.md「首页视觉」。 */
+         Material 3 / iOS `separatorInset` / Primer / 参考站这几条依据见 docs/site-design.md。 */
       .deck + .deck::before {
         content: "";
         position: absolute;
@@ -383,6 +383,16 @@
         transform: translateY(-2px);
         text-decoration: underline;
       }
+      /* 整行可点（stretched-link）：hover 高亮是整行（.deck:hover），点击预期自然也是整行，
+         但行内只有标题一个 <a>。给标题补一块铺满整行的伪元素，把链接的点击面拉到整行 ——
+         不新增 tab 停靠点（读屏/键盘仍只见一个链接），也不用动 workflow 的卡片结构。
+         定位上下文是 .deck（position: relative），不是 .deck-title 自己（它没有定位）。
+         代价：行内文字无法划选（伪元素盖在上面），这是该模式的固有取舍，GitHub/Primer 同款。 */
+      .deck-title::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+      }
       .deck-title .ext {
         margin-left: 1.5rem;
         opacity: 0;
@@ -404,8 +414,8 @@
         color: hsl(var(--foreground));
       }
       /* 副信息行 = 一句话的"规格说明"：`49 页 · 748 KB · 26-09-30.pdf`。
-         **别再给页数/大小加边框或胶囊**（2026-10 用户提的「别抢标题注意力」，详见 AGENTS.md
-         「首页视觉」）：整页带 1px 边框 + 圆角的元素**只有这些胶囊**（2 套 = 4 个，每套 2 个），
+         **别再给页数/大小加边框或胶囊**（2026-10 用户提的「别抢标题注意力」，详见
+         docs/site-design.md）：整页带 1px 边框 + 圆角的元素**只有这些胶囊**（2 套 = 4 个，每套 2 个），
          给一行"规格说明"比标题更重的形状就是层级倒挂；现在信息只由字号 + 颜色承担（都继承这里）。
          **减重也不能靠把颜色调淡**：浅色下 muted `#737373` 对白底是 4.74:1，刚过 WCAG AA 的
          4.5:1（深色 7.85:1），再淡就不合格 —— 能去掉的只有装饰（边框/内边距），不是对比度。
@@ -641,7 +651,7 @@
           height="64"
           onerror="this.remove()"
         />
-        <!-- 全页唯一的 h1（以前这里是标语、`Slides` 只是 h2；合并的理由见 AGENTS.md「首页视觉」）。
+        <!-- 全页唯一的 h1（以前这里是标语、`Slides` 只是 h2；合并的理由见 docs/site-design.md）。
              **别删掉这一处**：页面没有 h1 对读屏与搜索都不友好。
              标题旁不再显示套数（理由同上）。要恢复：在 h1 里加回那个套数 span —— 它是 COUNT
              的占位注释，**本文件里不能写出原文**（见文件开头那条坑）—— 并把上面那条 `.count`

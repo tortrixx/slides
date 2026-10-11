@@ -5,10 +5,12 @@
 # 对应 AGENTS.md §6「改 workflow 后的验证清单」，把第 1–4 步做成可执行的：
 #   1) 从 YAML 里抽出所有 run: 脚本
 #   2) bash -n 语法检查 + 多字节陷阱 lint
-#   3) 在 /tmp 的临时副本里真跑「编译」与「生成导航页」等步骤，覆盖 ①~⑩：
-#        冷启动全量 / 只改一个 deck 的增量（含非 ASCII 目录名）/ 删除某套后的残留清理 /
-#        某套编译失败必须 exit 1 / 文件夹名非法必须 exit 1 / 一套都没有必须 exit 1 /
-#        导航页边界（读不到 /Count、残留文件清理、BUILD_DIR 为空必须被拒）
+#   3) 在 /tmp 的临时副本里真跑「编译」与「生成导航页」等步骤，覆盖 ①~⑪：
+#        冷启动全量（含占位符注入与残留检查）/ HTML 转义 / 只改一个 deck 的增量
+#        （含非 ASCII 目录名）/ 删除某套后的残留清理 / 某套编译失败必须 exit 1 /
+#        文件夹名非法必须 exit 1（空格/点号开头/含换行）/ 一套都没有必须 exit 1 /
+#        导航页边界（读不到 /Count、残留文件清理、BUILD_DIR 危险值被拒）/
+#        Release/tag 逻辑（stub gh）/ 事件维度全量退化 / 列表顺序 / 样式表花括号平衡
 #
 # 用法：
 #   bash verify-site.sh            # 只做静态检查（不编译，几秒）
@@ -18,6 +20,14 @@
 # =============================================================================
 set -uo pipefail
 cd "$(dirname "$0")"
+
+# 前置依赖检查（fail closed，报错指明缺什么）：本脚本用 ruby 解析 workflow 的 env、
+# python3 做多字节 lint 与 ⑪、git 造夹具。缺了再往下跑只会得到**假红**
+# （exit 127、或 YAML 读到空值后连环误报），所以先在这里拦住。
+# （strings / typst 只有 --build 的编译路径才用，在 §3 开头单独查。）
+for dep in ruby python3 git; do
+  command -v "$dep" >/dev/null || { printf 'FAIL 缺少依赖：%s（verify-site.sh 需要它才能运行）\n' "$dep" >&2; exit 1; }
+done
 
 WF=.github/workflows/build-and-deploy.yml
 # 每次运行用**独立**临时目录：写死 /tmp/slides-verify 时，两个并发运行（本地跑一遍的同时
@@ -56,10 +66,23 @@ echo "── 1) 从 YAML 抽出 run: 脚本 ──"
 ruby -ryaml -e '
   wf = YAML.load_file(ARGV[0]); out = ARGV[1]; require "fileutils"; FileUtils.mkdir_p(out)
   wf["jobs"].each { |jn, job| job["steps"].each_with_index { |s, i|
-    next unless s["run"]; File.write("#{out}/#{jn}-#{i}.sh", s["run"]) } }' \
+    next unless s["run"]; File.write("#{out}/#{jn}-#{i}.sh", s["run"]) } }
+  # 复合 action（.github/actions/*\/action.yml）里的 run 步骤同样是 CI 逻辑，
+  # 但不在 workflow 文件里 —— 不抽出来的话 bash -n / 多字节 lint 都覆盖不到它。
+  Dir.glob(".github/actions/*/action.yml").each { |af|
+    a = YAML.load_file(af); steps = a.dig("runs", "steps"); next unless steps
+    name = File.basename(File.dirname(af))
+    steps.each_with_index { |s, i|
+      next unless s["run"]; File.write("#{out}/action-#{name}-#{i}.sh", s["run"]) } }' \
   "$WF" "$TMP/scripts"
 n=$(ls "$TMP/scripts"/*.sh 2>/dev/null | wc -l | tr -d ' ')
 if [ "$n" -ge 4 ]; then ok "抽出 $n 段脚本"; else bad "只抽出 $n 段脚本（应 ≥4）"; fi
+n_act=$(ls "$TMP"/scripts/action-*.sh 2>/dev/null | wc -l | tr -d ' ')
+if [ -f .github/actions/setup-fonts/action.yml ] && [ "$n_act" -eq 0 ]; then
+  bad "setup-fonts 复合 action 的 run 步骤没被抽出来（语法/lint 覆盖不到它）"
+elif [ "$n_act" -gt 0 ]; then
+  ok "复合 action 的 $n_act 段 run 脚本也纳入检查"
+fi
 
 echo "── 2) 语法与多字节检查 ──"
 # 注意：`bash -n f1 f2 f3` 只把第一个当脚本、其余当位置参数 —— 语法检查会**静默只覆盖一个文件**。
@@ -223,8 +246,11 @@ if [ "${1:-}" != "--build" ]; then
   [ "$FAIL" -eq 0 ]; exit
 fi
 
-echo "── 3) 真跑 ①~⑩（需要 typst）──"
-command -v typst >/dev/null || { bad "没找到 typst，跳过"; printf '%d 通过 / %d 失败\n' "$PASS" "$FAIL"; exit 1; }
+echo "── 3) 真跑 ①~⑪（需要 typst）──"
+# 编译路径的额外依赖：typst 编译夹具；导航页步骤用 strings 读 PDF 的 /Count。
+for dep in typst strings; do
+  command -v "$dep" >/dev/null || { bad "没找到 $dep，跳过编译路径"; printf '%d 通过 / %d 失败\n' "$PASS" "$FAIL"; exit 1; }
+done
 
 COMPILE=""; INDEX=""
 # **按内容签名定位步骤，不认 steps 下标**：抽取出来的文件名是 build-<下标>.sh，
@@ -242,12 +268,27 @@ if [ -z "$INDEX" ]; then
   bad "在抽出的脚本里找不到「生成导航页」步骤（应含 <!--SLIDES-->），门禁需要更新"
   printf '%d 通过 / %d 失败\n' "$PASS" "$FAIL"; exit 1
 fi
+# ⑨b 编译环境哈希必须覆盖装字体的复合 action：字体逻辑抽到 .github/actions/setup-fonts 之后，
+#    wf_rev 若仍只哈希 workflow 文件，改字体（在 action 里）就不会让 stamp 失配 ——
+#    未改动的 deck 会静默复用「旧字体编出来的 PDF」，正是 stamp 机制要防的那种失效。
+if grep -q 'setup-fonts/action\.yml' "$COMPILE"; then
+  ok "⑨b 编译环境哈希覆盖 setup-fonts 复合 action（改字体 = 全量重编）"
+else
+  bad "⑨b 编译环境哈希没覆盖 setup-fonts/action.yml（改字体不会触发全量重编）"
+fi
 # workflow 里 env: 级别的变量（上面已从 YAML 读出，不再写死）
 run_compile() { ( cd "$1" && RUNNER_TEMP="$2" BUILD_DIR="$BUILD_DIR" TYPST_VERSION="$TYPST_VERSION" \
     RELEASE_TZ="$RELEASE_TZ" GITHUB_EVENT_NAME="${4:-push}" GITHUB_REF="${5:-refs/heads/main}" \
     GITHUB_SHA="${3:-$(git rev-parse HEAD 2>/dev/null || echo nosha)}" bash "$COMPILE" ); }
 run_index() { ( cd "$1" && RUNNER_TEMP="$2" BUILD_DIR="$BUILD_DIR" TYPST_VERSION="$TYPST_VERSION" \
     RELEASE_TZ="$RELEASE_TZ" bash "$INDEX" ); }
+# 与 workflow 编译步骤的「编译环境哈希」算法保持一致：workflow + 装字体的复合 action
+# 两个文件一起哈希。两边只要有一处对不上，②⑨ 就会走进「环境变了 → 全量」分支而**假红**
+# （这门门禁自己的 TYPST_VERSION 写死翻车史见 §6 的鲁棒性约定 —— 同一个教训）。
+wf_rev_of() {
+  ( cd "$1" && h="$(git hash-object "$WF" .github/actions/setup-fonts/action.yml 2>/dev/null)" \
+      && printf '%s\n' "$h" | git hash-object --stdin | cut -c1-12 )
+}
 fresh() {
   rm -rf "$1"; mkdir -p "$1" "$1/build"; cp -R ./. "$1"/; rm -rf "$1/build"; mkdir -p "$1/build"
   # 快照一次：工作树里未提交的改动（新增了 deck 目录等）不会出现在 `git diff <基准> HEAD` 里，
@@ -281,7 +322,7 @@ chk "① 站点资源 icon.png 已进 build/" "$([ -f "$R/build/icon.png" ] && e
 # **它不管什么**：token 自己拼错（比如写成 `<!--SLIDE-->`）时残留 grep 是空的，那种由上面
 # 那条「首页卡片数」兜住（卡片会变成 0）。别把这条当万能。
 # 以前这里钉的是「页面 h1 里的 count 胶囊是个数字」，那条断言跟着标题从 h2 搬到 h1 改过一次；
-# 2026-10 标题旁的套数去掉之后（见 AGENTS「首页视觉」），改成钉三个 token 的残留。
+# 2026-10 标题旁的套数去掉之后（见 docs/site-design.md），改成钉三个 token 的残留。
 # `|| true`：没有残留 = grep 退出 1，pipefail 会让整条管道非零，而那是**成功**路径 ——
 # 不加的话 `bash -e verify-site.sh` 会在这里无声中止（脚本顶部 capture 的注释讲的就是这件事）。
 left="$(grep -oE '<!--(SLIDES|COUNT|META)-->' "$R/build/index.html" | paste -sd' ' - || true)"
@@ -310,7 +351,7 @@ else ok "①b 产物里没有未转义的原始标签"; fi
 # （版本与 workflow 哈希都必须和脚本真正会写的那份一致，否则会走进「环境变了→全量」分支，
 #   ② 就测不到增量路径了 —— 所以这里用上面从 YAML 读到的 TYPST_VERSION）
 sha0="$(cd "$R" && git rev-parse HEAD)"
-printf '%s %s %s\n' "$sha0" "$TYPST_VERSION" "$(cd "$R" && git hash-object "$WF" | cut -c1-12)" > "$R/build/.build-stamp"
+printf '%s %s %s\n' "$sha0" "$TYPST_VERSION" "$(wf_rev_of "$R")" > "$R/build/.build-stamp"
 printf '\n// 故意改动\n' >> "$R/slides/template/main.typ"
 (cd "$R" && git add -A && git -c user.email=v@x -c user.name=v commit -qm tmp) >/dev/null 2>&1
 capture run_compile "$R" "$T" "$(cd "$R" && git rev-parse HEAD)"
@@ -466,7 +507,7 @@ tiny_slides() {
     printf '#set document(title: "%s")\n#set page(paper: "a4")\n= %s\n\n正文\n' "$d" "$d" > "$1/slides/$d/main.typ"
   done
 }
-write_stamp() { printf '%s %s %s\n' "$1" "$2" "$(cd "$R6" && git hash-object "$WF" | cut -c1-12)" > "$R6/build/.build-stamp"; }
+write_stamp() { printf '%s %s %s\n' "$1" "$2" "$(wf_rev_of "$R6")" > "$R6/build/.build-stamp"; }
 
 R6="$TMP/repo-events"; fresh "$R6"; tiny_slides "$R6"
 (cd "$R6" && git add -A && git -c user.email=v@x -c user.name=v commit -qm tiny) >/dev/null 2>&1

@@ -1,0 +1,71 @@
+# =============================================================================
+# 安装模板字体（Noto Sans CJK SC / Inter / Maple Mono Normal NF）+ fail-closed 断言。
+# verify 与 build 两个 job 共用这一段（原来是逐字重复的 40 行 ×2 —— 两边漂移就是
+# 「环境不一致」的假红/漏检，所以抽成复合 action 只留一份）。
+#
+# **重要**：本文件的内容直接影响编译产物（字体变了排版就变），所以 build job 的
+# .build-stamp 哈希把本文件与 workflow 一起算进去（见 build job 编译步骤的 wf_rev）。
+# 改本文件 = 哈希失配 = 下一次 push 自动全量重编，这是有意设计，别把本文件从那个
+# 哈希里摘出去（门禁 ⑨b 钉住了这件事）。
+#
+# Maple Mono 的 zip 缓存由**调用方 job** 持有（actions/cache 的 post 保存语义放在
+# job 层最稳），本 action 只通过 maple-cache-hit 知道「要不要重新下载」；
+# 无论命中与否都会重新校验 sha256 —— 缓存被污染不会静默过关。
+# =============================================================================
+name: setup-fonts
+description: 安装 Noto Sans CJK SC / Inter / Maple Mono Normal NF 并断言 typst 识别
+inputs:
+  maple-cache-hit:
+    description: 调用方 actions/cache 的 cache-hit（非 true 时重新下载 zip；sha256 校验照跑）
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: 安装模板字体（Noto Sans CJK SC / Inter / Maple Mono Normal NF）
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        # ① 中文与西文走 apt。故意不装 fonts-noto-cjk-extra —— 它要额外下载约 145MB，
+        # 而模板只用到 Regular / Bold。若确实需要 Light / Medium 等更多中文字重，
+        # 把 fonts-noto-cjk-extra 加回下面的列表即可。
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends fonts-noto-cjk fonts-inter \
+          || sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+        # 解压代码字体要用 unzip，个别精简镜像里没有
+        command -v unzip >/dev/null || sudo apt-get install -y --no-install-recommends unzip
+
+        # ② 代码字体：Ubuntu 源里没有 Maple Mono，从上游 Release 下固定版本（版本与哈希见 workflow 的 env）。
+        # 缓存命中时跳过下载；但 zip 与解出来的 TTF 都照跑 sha256 校验：
+        # 上游改了包、下载被劫持、缓存被污染，三种情况都直接红，不会静默换掉字体。
+        zip="$HOME/maple-mono-cache/MapleMonoNormal-NF-CN-unhinted.zip"
+        mkdir -p "$(dirname "$zip")"
+        if [ "${{ inputs.maple-cache-hit }}" != "true" ]; then
+          curl -fsSL --retry 3 -o "$zip" \
+            "https://github.com/subframe7536/maple-font/releases/download/${MAPLE_MONO_VERSION}/MapleMonoNormal-NF-CN-unhinted.zip"
+        fi
+        echo "${MAPLE_MONO_ZIP_SHA256}  $zip" | sha256sum -c -
+        unzip -j -o "$zip" "MapleMonoNormal-NF-CN-Regular.ttf" -d "$RUNNER_TEMP/maple-mono"
+        echo "${MAPLE_MONO_TTF_SHA256}  $RUNNER_TEMP/maple-mono/MapleMonoNormal-NF-CN-Regular.ttf" | sha256sum -c -
+        sudo install -d /usr/share/fonts/truetype/maple-mono
+        sudo install -m644 "$RUNNER_TEMP/maple-mono/MapleMonoNormal-NF-CN-Regular.ttf" /usr/share/fonts/truetype/maple-mono/
+        rm -rf "$RUNNER_TEMP/maple-mono"
+
+        fc-cache -f
+
+        # ③ fail closed：这三个字族都必须真被 Typst 认出来。缺任何一个 Typst 都不报错，
+        # 只会静默回退（中文掉成方块、代码掉成 DejaVu），PDF 照样编得出来 —— 所以显式断言。
+        # 断言的是 "Maple Mono Normal NF"（deck 里写的那一个）：字体 name 表里的家族名其实是
+        # "Maple Mono Normal NF CN"，Typst 会把末尾的 "cn" 当风格后缀剥掉
+        # （typst-library/src/text/font/info.rs 的 typographic_family，SUFFIXES 里含 "cn"），
+        # 所以按 name 表原文断言会假红。
+        fonts_list="$(typst fonts)"
+        for family in "Inter" "Noto Sans CJK SC" "Maple Mono Normal NF"; do
+          grep -Fx -- "$family" <<<"$fonts_list" >/dev/null \
+            || { echo "::error::字体缺失：${family}（装字体那步没生效，PDF 会静默回退）"; exit 1; }
+        done
+
+        # 打印实际识别到的字族，方便排查（只进日志，不影响结果）
+        grep -E 'Noto Sans CJK|Inter|Maple' <<<"$fonts_list" | sort -u | head -n 10 || true
+
+# tortrixx/slides · 仓库约定见 AGENTS.md
