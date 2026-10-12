@@ -327,8 +327,16 @@ chk "① 站点资源 icon.png 已进 build/" "$([ -f "$R/build/icon.png" ] && e
 # 不加的话 `bash -e verify-site.sh` 会在这里无声中止（脚本顶部 capture 的注释讲的就是这件事）。
 left="$(grep -oE '<!--(SLIDES|COUNT|META)-->' "$R/build/index.html" | paste -sd' ' - || true)"
 chk "① 占位注释已全部消费（产物里没有残留）" "$left" ""
-if grep -q '最后更新 ' "$R/build/index.html"; then ok "① 页脚时间戳已注入（META 占位符生效）"
-else bad "① 页脚没有时间戳：META 占位符可能被改名/拼错"; fi
+# 断言**页脚区里出现一个 YYYY-MM-DD HH:MM 时间戳**，而不是某句固定文案：文案是随时会改的
+# 展示措辞（「最后更新」→「更新于」，2026-10 改），钉死它只会制造假红 —— 实测只改那句文案
+# 就 85 通过 / 1 失败，报的还是「META 可能被改名/拼错」，把排查引向错误的方向。
+# 占位符真被改名时页脚里会剩下 `<!--META-->`（上面那条残留 grep 也钉着），这条照样红。
+# 用 here-string 而不是 `printf '%s' "$x" | grep -q`：脚本是 `set -uo pipefail`，数据一大、grep
+# 提前退出就会让 printf 吃 EPIPE、整条管道变非零，把「匹配成功」判成失败（见 §7 那条坑）。
+footer_html="$(sed -n '/<footer/,/<\/footer>/p' "$R/build/index.html")"
+if grep -qE '[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}' <<<"$footer_html"; then
+  ok "① 页脚时间戳已注入（META 占位符生效）"
+else bad "① 页脚没有 YYYY-MM-DD HH:MM 时间戳：META 占位符被改名/拼错，或时间格式被改了"; fi
 
 # ①b HTML 转义：title/subtitle 来自可编辑的 main.typ，转义护栏一旦回归就会在站点上执行注入。
 # 造一个带 & < > 的标题，断言产物里是实体、且没有原始标签。
@@ -476,7 +484,7 @@ order="$(grep -o 'href="[^"]*\.pdf"' "$R10/build/index.html" | sed 's/href="//;s
 chk "⑩ 顺序＝最新在前（日期倒序、同日按名字升序、无日期排最后）" \
     "$order" "mm-same.pdf zz-new.pdf aa-old.pdf mm-nodate.pdf"
 # 正面断言：**卡片区**里不该出现任何 YYYY-MM-DD 形态的文本（日期只用于排序）。
-# 注意不能直接整页 grep —— 页脚的「最后更新 2026-…」本身就是一个日期，而且它在 <main> 之外。
+# 注意不能直接整页 grep —— 页脚的「更新于 2026-…」本身就是一个日期，而且它在 <main> 之外。
 if sed -n '/<main/,/<\/main>/p' "$R10/build/index.html" | grep -qE '[0-9]{4}-[0-9]{2}-[0-9]{2}'; then
   bad "⑩ 卡片区渲染出了日期（日期只用于排序，不该上页面）"
 else ok "⑩ 卡片区没有日期（只用于排序）"; fi
