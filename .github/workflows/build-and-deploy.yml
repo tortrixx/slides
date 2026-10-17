@@ -81,7 +81,8 @@ jobs:
     name: 校验 CI 逻辑（门禁）
     runs-on: ubuntu-24.04
     if: github.event.deleted != true
-    # 这个 job 会把编译步真跑 16 次（①~⑪ 里的多数），给个上限免得异常时一直挂着
+    # 这个 job 会把编译步真跑 18 次（①~⑪ 里的多数；2026-10-17 加 ⑦b 页数夹具后 16 → 18），
+    # 给个上限免得异常时一直挂着
     timeout-minutes: 10
     steps:
       - name: 检出仓库
@@ -190,15 +191,36 @@ jobs:
             *[!A-Za-z0-9._/-]*)
               echo "::error::BUILD_DIR 非法（'${raw}'）：只允许字母/数字/点/下划线/连字符/斜杠"; exit 1 ;;
           esac
+          # 产物目录**必须叫 build**（`build` 或 `xxx/build`）：导航页那步会
+          # `rm -rf "$BUILD_DIR"/*`，只要这个目录不是专门的产物目录，删掉的就是别的东西 ——
+          # 2026-10-17 独立复核实测：BUILD_DIR=docs 删掉 docs/*.md、BUILD_DIR=.github 删掉
+          # workflow 与复合 action、BUILD_DIR=slides/d1 删掉 d1/main.typ 与 d1/src/（含未跟踪的
+          # 真实图片 403 KB），而且脚本多数情况下还会 exit 0、一句报错都没有。
+          # 「名字必须以 build 结尾」把整类误删一次性堵死（`build` 与 `slides/build` 都合法），
+          # 比逐个判断「里面像不像源码」可靠 —— 后者挡不住「只含未跟踪文件」的目录。
+          case "$norm" in
+            build|*/build) ;;
+            *) echo "::error::BUILD_DIR 非法（'${raw}'）：产物目录必须叫 build（例如 build 或 slides/build）"; exit 1 ;;
+          esac
+          # 第二道（上面那条收紧后已是冗余，留着防以后放宽）：产物目录里不能出现 main.typ。
+          if [ -f "$norm/main.typ" ]; then
+            echo "::error::BUILD_DIR 非法（'${raw}'）：这是幻灯片源码目录（含 main.typ），产物目录不能指向它"; exit 1
+          fi
+          for d in "$norm"/*/; do
+            [ -e "${d}main.typ" ] || continue
+            echo "::error::BUILD_DIR 非法（'${raw}'）：其下的 ${d} 是幻灯片源码目录，产物目录不能包含 deck"; exit 1
+          done
           [ -n "${TYPST_VERSION:-}" ] || { echo "::error::TYPST_VERSION 为空，无法判断编译环境是否变化"; exit 1; }
           # RELEASE_TZ 只在 release job 用，但配错了会让 tag 的日期悄悄跑偏（`TZ=Not/AZone date`
-          # 在 glibc/BSD 下**不报错**、静默退回 UTC，跨零点就差一天），所以这里按 zoneinfo 实打实检查。
+          # 在 glibc/BSD 下**不报错**、静默退回 UTC，跨零点就差一天）。用 python3 的 zoneinfo
+          # **实打实解析**：旧写法 `[ -e /usr/share/zoneinfo/$tz ]` 太松 —— `Asia`、`Etc` 是目录，
+          # `zone.tab`、`tzdata.zi` 是普通文件，四者全都「存在」而被放行，而 `TZ=Asia` /
+          # `TZ=zone.tab` 同样静默退回 UTC（2026-10-17 独立复核实测，macOS 与 ubuntu-24.04 都中）。
+          # （原来还有一道 `TZ="$tz" date` 的检查：实测它对任何非法值都返回 0，是死代码，已删。）
           tz="${RELEASE_TZ:-Asia/Shanghai}"
-          if [ "$tz" != "UTC" ] && [ ! -e "/usr/share/zoneinfo/${tz}" ]; then
-            echo "::error::RELEASE_TZ 非法（'${tz}'）：/usr/share/zoneinfo 下没有这个时区"; exit 1
+          if ! python3 -c 'import sys, zoneinfo; zoneinfo.ZoneInfo(sys.argv[1])' "$tz" 2>/dev/null; then
+            echo "::error::RELEASE_TZ 非法（'${tz}'）：zoneinfo 解析不了（或 runner 上没有 python3）"; exit 1
           fi
-          TZ="$tz" date +%Y.%m.%d >/dev/null 2>&1 \
-            || { echo "::error::RELEASE_TZ 非法（'${tz}'）：date 无法使用该时区"; exit 1; }
           # RECENT_DAYS 决定首页「最近更新」圆点的窗口，会原样拼进
           # `git log --since="${RECENT_DAYS} days ago"`。**必须显式校验**：值写错（'abc'、空、
           # 负数、带单位）时 git 不报错、只是把 --since 解析成一个过去的/无效的时间点，
@@ -282,16 +304,25 @@ jobs:
           # 一旦上一次运行失败（缓存没存下来）或两次 push 挨得很近，那一次改过的 deck 就既不在
           # diff 里、缓存里又是旧 PDF，会被一直复用成旧版本 —— 线上 PDF 与 main 不一致且不会自愈。
           # stamp 里还带 Typst 版本与「编译环境哈希」：编译环境变了就整体重编。
-          # 编译环境哈希覆盖所有会影响编译产物的文件：workflow 本身 + 装字体的复合 action
+          # 编译环境哈希覆盖所有会影响编译产物的东西：workflow 本身 + 装字体的复合 action
           # （字体逻辑在 .github/actions/setup-fonts 里 —— 漏掉它的话，改字体不会触发全量重编，
-          # 那正是 stamp 要防的静默失效；门禁 ⑨b 钉着这一条）。
+          # 那正是 stamp 要防的静默失效；门禁 ⑨b 钉着这一条）+ **装上的字体包版本**
+          # （镜像标签会被原地滚动、apt 取档案库当前版本，光钉 runs-on 挡不住字体漂移）。
           # `2>/dev/null` + 空值兜底是本意「容忍失败」：CI 的 run 块由 `bash -e {0}` 执行、脚本里的
           # `set -uo pipefail` 并不会关掉 errexit —— 拿不到哈希时用一个必定不匹配 stamp 的
           # 值，让本次退化成全量编译（fail safe）。
           wf_hashes="$(git hash-object .github/workflows/build-and-deploy.yml .github/actions/setup-fonts/action.yml 2>/dev/null)" || wf_hashes=""
+          # 字体包的**版本**也进指纹：runs-on 钉住 ubuntu-24.04 并不等于钉住字体 —— 镜像标签会被
+          # GitHub 原地滚动，`apt-get install` 装的也是档案库当前版本，两者都能在**不改任何仓库
+          # 文件**的前提下换掉 Noto Sans CJK / Inter。不记录版本的话，字体悄悄更新后未改动的 deck
+          # 会继续复用「旧字体编出来的 PDF」，而这次改过的 deck 用新字体 —— 同一个站点的排版不一致
+          # 且不自愈（正是 stamp 要防的那类静默失效）。
+          # 取不到 dpkg-query（本机 macOS）时为空串：门禁的 wf_rev_of() 用**逐字相同**的算法、
+          # 同样为空，两边一致即可 —— 算法一旦漂移，②⑨ 会走进「环境变了 → 全量」而假红。
+          fonts_ver="$( (dpkg-query -W -f='${Package}=${Version}\n' fonts-noto-cjk fonts-inter 2>/dev/null || true) | LC_ALL=C sort )"
           wf_rev=""
           if [ -n "$wf_hashes" ]; then
-            wf_rev="$(printf '%s\n' "$wf_hashes" | git hash-object --stdin 2>/dev/null | cut -c1-12)" || wf_rev=""
+            wf_rev="$(printf '%s\n%s\n' "$wf_hashes" "$fonts_ver" | git hash-object --stdin 2>/dev/null | cut -c1-12)" || wf_rev=""
           fi
           [ -n "$wf_rev" ] || wf_rev="missing-$(date +%s)"
           stamp="$build_dir/.build-stamp"
@@ -451,7 +482,23 @@ jobs:
           # **永久**被缓存带下去（自愈不了）。三个通配符分别覆盖普通文件、单点隐藏文件、
           # `..` 开头的隐藏文件；.build-stamp 是下次增量编译的基准，必须留下。
           # （历史上这里还白名单过一个 `covers/` 目录 —— 那是 2026-10-17 撤掉的封面功能留下的，
-          #   现在 build/ 里除了 PDF、index.html、.build-stamp 之外都不该有东西。）
+          #   现在 build/ 里除了 PDF、index.html、.build-stamp 之外都不该有东西。
+          #   白名单里**不要**再加任何目录名：加回去就等于把「残留物必须清掉」这一面废掉，
+          #   而门禁 ⑦ 现在专门放了一个残留子目录（build/stale-dir/old.png）钉住「子目录也必须清掉」。）
+          #
+          # 动手前先做一次**只读**探测：BUILD_DIR 若被指到 slides/ 里的 deck 目录（或 slides/
+          # 本身），下面的 rm -rf 会把源码删掉 —— 实测 BUILD_DIR=slides/d1 删掉了 d1/main.typ
+          # 与 d1/src/、首页只是少一张卡片、exit 0，一句报错都没有（未跟踪的新图片永久丢失）。
+          # 「校验构建环境变量」那步已经拦了这种取值，这里是第二道（结构性防线：不管 BUILD_DIR
+          # 从哪来，只要看见 main.typ 就一个字节都不删）。
+          for probe in "$BUILD_DIR"/* "$BUILD_DIR"/.[!.]* "$BUILD_DIR"/..?*; do
+            [ -e "$probe" ] || continue
+            if [ "$(basename "$probe")" = "main.typ" ] \
+               || { [ -d "$probe" ] && [ -e "$probe/main.typ" ]; }; then
+              echo "::error::BUILD_DIR=${BUILD_DIR} 里出现了幻灯片源码（${probe}）—— 产物目录被指到了 slides/ 下的 deck 目录，拒绝清理以免删掉源码"
+              exit 1
+            fi
+          done
           for stale in "$BUILD_DIR"/* "$BUILD_DIR"/.[!.]* "$BUILD_DIR"/..?*; do
             [ -e "$stale" ] || continue
             case "$(basename "$stale")" in
@@ -489,23 +536,14 @@ jobs:
             printf '%s\t%s\n' "${modified:-0000-00-00}" "$name" >> "$deck_list"
           done
 
-          # 取 main.typ 里 config-info 的 title / subtitle。
+          # 取 main.typ 里第一个 title / subtitle 的值。解析逻辑在 tools/deck-meta.py 里，
+          # **不在 shell 里逐行 sed**：值可能是跨行的 `[ … ]`、里面可能含 `]`（`数组 a[0] 的用法`）
+          # 或转义引号（`"他说 \"你好\""`），逐行正则会**静默**截断标题（截断后看着还挺合理，
+          # 构建与门禁全绿）。单独成文件也让它能被门禁直接单测（verify-site.sh 的 ①c）。
           # title 取不到时退回文件夹名；subtitle 取不到（含 subtitle: [] 和 A4 文档）时
           # 卡片**不渲染**那行描述，而不是塞一句默认文案 —— 少一行说明总好过一句假话。
-          # 依次尝试：[..] 单独成行 → 单行里的 [..] → ".." 字符串写法。两处细节：
-          #   1) 跳过注释行，否则 // title: [旧标题] 会被当成真标题；
-          #   2) 单行写法要求键前面不是字母/下划线，否则 subtitle: 里的 title: 会被贪婪匹配成标题。
-          pick() {
-            local value
-            value="$(sed -nE "/^[[:space:]]*\/\//d; s/^[[:space:]]*$2:[[:space:]]*\[([^]]*)\].*/\1/p" "$1" | head -n 1)"
-            if [ -z "$value" ]; then
-              value="$(sed -nE "/^[[:space:]]*\/\//d; s/.*[^[:alnum:]_]$2:[[:space:]]*\[([^]]*)\].*/\1/p" "$1" | head -n 1)"
-            fi
-            if [ -z "$value" ]; then
-              value="$(sed -nE "/^[[:space:]]*\/\//d; s/.*[^[:alnum:]_]$2:[[:space:]]*\"([^\"]*)\".*/\1/p" "$1" | head -n 1)"
-            fi
-            printf '%s' "$value"
-          }
+          command -v python3 >/dev/null || { echo "::error::缺少 python3（解析 title/subtitle 需要它）"; exit 1; }
+          pick() { python3 tools/deck-meta.py "$1" "$2"; }
           escape() {
             # 单引号也转义：现在这些值只进元素内容、不进属性，但补上成本为零，
             # 免得以后有人把 title 拿去拼属性时才想起它。
@@ -543,14 +581,20 @@ jobs:
             # 1 KB 以下显示 B；不到 1 MiB 的用 KB（封顶 1023，免得 1048575 被四舍五入成 "1024 KB"）
             size="$(awk -v b="$bytes" 'BEGIN { if (b < 1024) { printf "%d B", b } else if (b < 1048576) { kb = b / 1024; if (kb > 1023) kb = 1023; printf "%.0f KB", kb } else { printf "%.1f MB", b / 1048576 } }')"
 
-            # 页数：Typst 产出的 PDF 是未压缩的，页树根节点的 /Count 就是总页数
-            # （已核对 26-09-30=49、template=20，与逐页渲染数一致）。
-            # 取 /Count 的最大值而不是第一个，避免个别 struct tree 的计数排在前面；
-            # 再限定 1–4 位数字，免得二进制里凑巧出现的字节被当成计数。
-            # 万一以后 PDF 被压缩、这里读不到，会渲染成空胶囊（不至于显示错的页数）。
-            # 注意末尾的 `|| true`：grep 无匹配时退出 1，在本步的 set -euo pipefail 下
-            # 会**直接终止整个步骤**（那就不是「空胶囊」而是整次部署被跳过），所以必须吞掉。
-            pages="$(strings "$pdf" | grep -o '/Count [0-9]\{1,4\}' | awk '{print $2}' | sort -n | tail -1)" || true
+            # 页数：Typst 产出的 PDF 未压缩，页树根节点的对象长这样：`/Type/Pages/Count 49`。
+            # **必须锚在 `/Type/Pages` 上**，不能只找 `/Count` 再取最大值：大纲（书签）里也有
+            # `/Type/Outlines … /Count N`，而那个 N 是**标题数**，不是页数。旧写法
+            # （`grep '/Count ' | sort -n | tail -1`）于是会让「标题数 > 页数」的 deck 显示错的页数
+            # ——实测：1 页写 2 个 `=` 标题 → 卡片显示「2 页」（2026-10-17 独立复核实测）。
+            # 现有两套 deck 恰好都是页数 > 标题数（template 20 页/3 标题、26-09-30 49 页/5 标题），
+            # 所以一直没暴露；门禁 ⑦b 现在用「1 页 2 标题」的夹具正面钉住这一条。
+            # 取第一条匹配（Typst 只产出一个页树根节点）；万一以后 PDF 被压缩、读不到，
+            # 就整枚徽章都不渲染 —— 宁可没有页数，也不显示一个错的。
+            # 末尾的 `|| true`：grep 无匹配时退出 1，在本步的 set -euo pipefail 下
+            # 会**直接终止整个步骤**（那就不是「没有页数」而是整次部署被跳过），所以必须吞掉。
+            pages="$(strings "$pdf" \
+              | grep -oE '/Type[[:space:]]*/Pages[[:space:]]*/Count[[:space:]]+[0-9]{1,6}' \
+              | grep -oE '[0-9]{1,6}$' | head -n 1)" || true
             # 读不到页数时**整枚胶囊都不放**（否则页面上会冒出一个只有「页」字的空胶囊）
             pages_html=""
             if [ -n "$pages" ]; then pages_html="<span class=\"badge\">${pages} 页</span>"; fi
@@ -610,7 +654,12 @@ jobs:
           # 页脚再来一个是重复入口。**别再把它加回来**（门禁里那条断言也一起删了）。
           # **注意**：若以后真往这里塞 HTML，`awk` 的 `sub()` 替换串里 `&` 表示「匹配到的文本」，
           # 文案里不能出现 `&`（要写就写 `\&`）。
-          meta="更新于 $(TZ="${RELEASE_TZ}" date '+%Y-%m-%d %H:%M')"
+          # 消费者必须用与校验步**完全相同**的兜底（`${RELEASE_TZ:-Asia/Shanghai}`）：
+          # 校验步把「未设置/空串」归一化成默认值再检查，而 `TZ=""` 不是「系统默认」而是 **UTC**
+          # —— 两边写法不一致时，`RELEASE_TZ` 一旦被删成空，校验会打印默认值并放行、
+          # 消费者却按 UTC 算日期，CST 00:00–08:00 的 push 会发到**前一天**的 Release
+          # （2026-10-17 独立复核发现；现在两个消费者都写全兜底）。
+          meta="更新于 $(TZ="${RELEASE_TZ:-Asia/Shanghai}" date '+%Y-%m-%d %H:%M')"
 
           awk -v items="$items" -v count="$count" -v meta="$meta" '
             /<!--SLIDES-->/ { while ((getline line < items) > 0) print line; close(items); next }
@@ -645,7 +694,10 @@ jobs:
   deploy:
     name: 部署到 GitHub Pages
     needs: build
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    # deleted 防护对齐 verify/build/release 三个 job（2026-10-17 加）：当前虽无实际触发路径
+    # （删除分支会带着 build 一起被跳过；删 tag 时 github.ref 不是 refs/heads/main），
+    # 但它是唯一一个**能在 push 事件上跑却又没这道防护**的 job，属于防线不对称。
+    if: github.event.deleted != true && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-24.04
     # 上限：部署本身很快，卡住通常是 Pages 侧问题，别让它占满默认 6 小时
     timeout-minutes: 10
@@ -710,7 +762,7 @@ jobs:
             echo "使用本次推送的 tag：${tag}"
           else
             # 日常 push：按日期命名，同一天只维护一个 Release
-            tag="v$(TZ="${RELEASE_TZ}" date +%Y.%m.%d)"
+            tag="v$(TZ="${RELEASE_TZ:-Asia/Shanghai}" date +%Y.%m.%d)"
             managed=true
             echo "按日期发版：${tag}（同一天的多次 push 只更新这一个 Release）"
           fi
@@ -834,8 +886,9 @@ jobs:
         # 覆盖剩下所有情况：Release 已存在、且说明里没有我们的标记（用户手写 / 旧版工作流建的）。
         # 这里**刻意不用 action**，改用 gh 直接传附件：gh release upload 只动附件、
         # 天然不会碰 body；而 softprops 的更新路径会 PATCH 整个 release，实测在本仓库返回
-        # `403 Resource not accessible by integration`（同一 token 上传附件却是成功的，
-        # 见 2026-10-01 的运行日志），所以这条路必须绕开它。
+        # `403 Resource not accessible by integration` 一次（2026-10-01 的日志；61 次运行里仅此一次，
+        # 且那次走的正是「已存在 Release + 不带 body_path」的组合 —— 样本太小、无法断言因果，
+        # 所以别把它当成定论），而 `gh` 只动附件、天然不碰 body，语义上正是我们要的。
         if: steps.version.outputs.exists == 'true' && steps.version.outputs.ours != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
