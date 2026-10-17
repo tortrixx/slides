@@ -234,7 +234,13 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
     「编译环境指纹」（见下条），改任何一个都会让旧 stamp 失配。门禁 ⑨b 钉着这一点。
 - **增量编译**：`actions/cache@v6` 以 `slides-build-main-<run_id>` 为 key、`slides-build-main-`
   为 restore-keys 缓存 `build/`。逐套判断：全量 / 缓存缺 PDF / 该目录相对**基准提交**有改动 → 重编。
-  最后清理「`slides/<名称>/main.typ` 已不存在」的残留 PDF。
+  最后清理「`slides/<名称>/main.typ` 已不存在」的残留 PDF **和对应的封面图**（`build/covers/<名称>.png`）。
+  **封面缩略图**（2026-10-17 加，细则见 docs/site-design.md）跟着增量走，别让它变成"每次全量"：
+  只对**这次真编过**的 deck 跑 `typst compile --format png --ppi 32 --pages 1`（16:9 出 374×210、
+  约 3–6 KB）；复用的那套**缺图时只补图、不重编 PDF**（老缓存 / 缓存被清理 / 本功能刚上线的自愈，
+  门禁 ②c 钉着）；生成失败就 `exit 1`（缺图时页面不报错、只是少一张图，属于最难发现的坏法）。
+  `covers/` 与 PDF 同住 `build/`，**不用改 cache 的 path/key**，但导航页那步的旧文件清理白名单
+  要加上目录名 `covers`（见「站点静态资源」那条）。
   基准**不是** `github.event.before`，而是缓存目录里 `.build-stamp` 记的**上一次真正编译成功的提交**：
   ```
   <sha> <TYPST_VERSION> <编译环境指纹>
@@ -259,6 +265,9 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
   通配符会展开成 `/*`**（实测会枚举 `/Applications`、`/Library`…），而 `'./'` 又等价于 `.`
   —— 清理会把整个工作树删掉。空值/`/`/`.`/`..`/绝对路径/含 `..`/含空格等一律 `::error::` + `exit 1`。
   这一步刻意放在装字体、恢复缓存**之前**（配错了 5 秒内就红，也不会先恢复一份缓存再失败）。
+  同一处还校验 **`RECENT_DAYS` 必须是 1–3650 的整数**（`${RECENT_DAYS-3}`：未设置兜底 3、
+  显式空串报错）。值写错时 `git log --since` **不报错**、只是圆点一个都不出现而 CI 全绿
+  （实测 `'abc'` → 0 个圆点、rc=0）；门禁 ⑦ 对 `''/'abc'/'0'/'-3'/'14 days'/'99999'` 全拒。
 - **幻灯片目录名的另外两个护栏**（§3.8 只管字符集）：
   - **点号开头**（`slides/.hidden`）：`for dir in slides/*/` 根本匹配不到它，会静默不编译、不出卡片，
     而只要还有别的 deck 就 `exit 0` —— 站点永远少一套。所以单独扫 `slides/.[!.]*/`、`slides/..?*/`
@@ -275,9 +284,12 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
   现在模板里提到它们只写名字，原文只出现在两处真正的注入点（`SLIDES` 与 `META`）；
   **`COUNT` 目前模板里没有用到**（标题旁的套数已按用户要求去掉，理由见 docs/site-design.md），
   但 workflow 的替换规则留着 —— 想恢复套数显示只需改模板，不用碰 YAML。
-  页脚**只放这个时间戳**：原来那句「本页由 GitHub Actions 自动生成」说的是构建过程、不是页面内容，
-  已删（与早先删掉 "Built by Typst & Touying." 同理）；提交号也一并不显示了——它是构建提交，
-  跟某套幻灯片最后一次改动无关，容易被误读。
+  页脚 = **「更新于 …」时间戳 + 一个「全部 PDF」链接**（指向 `releases/latest`，即当天那个汇总了
+  全部 PDF 的 Release；链接只钉结构不钉文案，见门禁 ①）。时间戳那句「本页由 GitHub Actions
+  自动生成」说的是构建过程、不是页面内容，已删（与早先删掉 "Built by Typst & Touying." 同理）；
+  提交号也一并不显示了——它是构建提交，跟某套幻灯片最后一次改动无关，容易被误读。
+  **注意 `awk` 的 `sub()` 替换串里 `&` 表示「匹配到的文本」**，所以 meta 文案里不要出现 `&`
+  （真要写就写 `\&`）。
   - **顺序＝最新在前**：先按 `git log -1 --format=%cs -- "slides/<名>/"` 取每套 deck **最后一次
     提交的日期**，`LC_ALL=C sort -t $'\t' -k1,1r -k2,2` 排序（日期倒序、同一天按文件夹名升序），
     取不到日期（浅克隆 / 从未提交）的排最后。**不要退回 `for dir in slides/*/`**：那是 bash 的
@@ -320,16 +332,31 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
     门禁同时钉了两面：读不到时不许出现「N 页」，正常 PDF 必须出现「N 页」。
   - **转义**：文件夹名与标题/副标题都会做 HTML 转义（`&` `<` `>` `"`），
     文件夹名另有字符集护栏（见 §3.8），两道一起保证生成的 HTML 不会被名字搞坏。
+  - **封面缩略图**：卡片第一个子元素是 `<img class="cover" src="covers/<名称>.png">`，
+    文件由**编译步**产出（见上面「增量编译」）。文件不存在时**整个 `<img>` 都不输出**
+    （同「读不到 `/Count` 就不渲染页数」的风格）；`alt=""` 是因为标题就在紧隔壁、它是纯装饰。
+  - **「最近更新」小圆点**：最近 `RECENT_DAYS`（workflow 顶部 `env:`，当前 3）天内提交过的
+    deck，标题后加 `<span class="dot">` + `<span class="sr-only">最近更新</span>`。判定用
+    `git log -1 --since="… days ago"`（**交给 git 做相对时间**，BSD/GNU 的 `date -d` 不通用）；
+    **取不到提交日期时不标记**（fail safe）—— 否则浅克隆/无历史的环境会把每行都标成「最近更新」。
+    门禁两面都钉：① 夹具里每套 deck 都被 `fresh()` 显式提交成「刚刚」，所以必须有；
+    ⑩ 那个夹具是 2020/2026-01 的老提交 + 一套从未提交的，必须一个都没有。
+    实现坑：`.deck-title` 是 inline-flex，**flex item 之间的空白会被忽略**，所以 `.dot` 得自带
+    `margin-left`，靠换行分不开。
   - 标题按**原文**显示：Typst 标记（`*粗体*`、反引号）不会被渲染，也不会被剥离。
 - **站点静态资源（`assets/`）**：Pages 只发布 `build/`，所以仓库里的静态文件由「生成导航页」
   那步开头拷进站点根目录（现在只有 `assets/icon.png`，即左上角头像；模板里写 `src="icon.png"`）。
   文件缺失是 `::error::` + 退出，**故意 fail closed**：页面不会因此报错，只是 `img` 被
   `onerror` 静默删掉，不失败的话很难发现。`verify-site.sh` 里钉了一条产物断言。
-  拷之前先清掉 `build/` 里「非 `*.pdf`、非 `index.html`、非 `.build-stamp`」的旧文件
-  （三个通配符 `*` / `.[!.]*` / `..?*` 一起覆盖普通文件与隐藏文件；`.build-stamp` 是增量基准，
-  必须留下）：`build/` 是 `actions/cache` 的缓存对象，只清 PDF 的话，某个版本拷进来、后来不再拷的
+  拷之前先清掉 `build/` 里「非 `*.pdf`、非 `index.html`、非 `.build-stamp`、非 `covers/`」的旧文件
+  （三个通配符 `*` / `.[!.]*` / `..?*` 一起覆盖普通文件与隐藏文件；`.build-stamp` 是增量基准、
+  `covers/` 是编译步产出的封面目录，两者都必须留下）：`build/` 是 `actions/cache` 的缓存对象，
+  只清 PDF 的话，某个版本拷进来、后来不再拷的
   静态资源会被缓存**永久**带下去，并随两份 artifact 一起发布到站点根目录，自愈不了
   （本地 `build/` 里就躺过 `avatar-*.png` 这种中间态残留）。
+  **白名单里加的是目录名 `covers`，不是 `*.png`** —— 写成通配会把「根级残留图片也要清掉」这条
+  一起废掉，门禁 ⑦ 用 `build/avatar-old.png` 钉着这一面；deck 被删/改名后 `covers/` 里的旧图
+  由**编译步**的残留清理负责删（名字必须出现在本次的 `names_file` 里）。
   头像原来写的是 `https://github.com/tortrixx.png`，为什么换掉（2026-10 实测）：
   - 那是**全页唯一的跨站请求**（其余 CSS/JS/图标全是内联的），所以必然最后出现；
   - 它会 **302** 到 `avatars.githubusercontent.com`，多一次 DNS + TLS，实测 1.84s 才拿到图；
@@ -344,6 +371,13 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
   多数是否决过替代方案才定下来的）：
   - `<meta charset>` 必须留在文件最前面（1024 字节编码探测窗口），中文注释不许挪到它前面；
   - 全页**只有一个 h1**（顶栏 `.page-title`），没有标语、没有区块 h2、标题旁无套数胶囊；
+  - **顶栏一行到底**（头像 + h1 + 右上角按钮，2026-10 改）：窄屏只是把头像收到 48px、
+    标题收到 1.25rem，**不再纵向堆叠**。改之前窄屏 `.head-row` 高 176.4px（`.spacer{flex:1}`
+    在 column 方向也参与分配），第一张卡片被压到 y=220；现在同条件 62px、卡片从 y=98 开始。
+    `.avatar` 的 CSS 分两档（48/64），`<img>` 上的 `width/height="64"` 是无 CSS 时的兜底；
+  - 行首是 **`.cover` 封面缩略图**（96×54，窄屏 72px；`object-fit: contain` + `align-self: center`，
+    理由见 docs/site-design.md），`height: auto` 必须写 —— 否则 `<img height="54">` 属性会在窄屏把图压扁；
+  - 标题后的 **`.dot`** 是「最近更新」小圆点（纯装饰 + 紧随其后的 `.sr-only` 文本承担语义）；
   - 字重写 `500`（意图 medium），**别写 600**（本字体栈里 600 就是 bold）；层级靠字号 + 颜色承担；
   - 行分隔线是 `.deck + .deck::before` 伪元素画的**两端渐隐**细线（页眉线是 2px 通栏实线，
     两条线"重量"必须不同）—— **别改回 `border-top`**（圆角会拐弯、渐变画不进 border）；
@@ -434,7 +468,7 @@ typst compile --format png --pages 6 main.typ '/tmp/p-{p}.png'
 
 # 本地跑门禁（CI 里也是同一条命令；改完 workflow 务必先本地过一遍）
 bash verify-site.sh            # 只做静态部分（30 项，含 Release/tag 逻辑，几秒）
-bash verify-site.sh --build    # 再加 ①~⑪ 的编译路径（共 86 项），和 CI 门禁完全同一条命令
+bash verify-site.sh --build    # 再加 ①~⑪ 的编译路径（共 109 项），和 CI 门禁完全同一条命令
 
 # 查看线上状态
 gh run list --repo tortrixx/slides
@@ -453,12 +487,16 @@ NAV="$(grep -l '<!--SLIDES-->' /tmp/wf-scripts/*.sh)"
 RUNNER_TEMP=/tmp/rt BUILD_DIR=build RELEASE_TZ=Asia/Shanghai bash "$NAV"
 # 注意 RUNNER_TEMP 目录得先 mkdir -p（脚本往那里写 slides-items.html）。
 # 这一步已不需要 GITHUB_SHA（页脚不再显示提交号）。
-# 然后用无头 Chrome 截图看效果。两个坑：
+# 然后用无头 Chrome 截图看效果。三个坑：
 #   1) headless 的 prefers-color-scheme 跟随系统（本机实测过 dark 也实测过 light）——
 #      想固定哪个主题，就在截图前注入 html.classList.add("dark")（页面自己的 JS 会按
 #      matchMedia 覆盖 class，所以要放在 </body> 前）；
 #   2) 入场动画带 fill-mode: both，t=0 时元素是 opacity:0 —— 截图前注入
-#      .fade{animation:none;opacity:1}，否则截出一张空页（**不是**页面没渲染）
+#      .fade{animation:none;opacity:1}，否则截出一张空页（**不是**页面没渲染）；
+#   3) **macOS 上无头 Chrome 的最小视口宽是 500px**：--window-size=390 实际按 500px 布局再
+#      裁成 390px（看着像内容整体偏右，不是布局 bug）。窄屏只能验到 500px；
+#      截图时 index.html 必须与 covers/、icon.png 同目录（相对路径），否则封面全是破图。
+#      两条的完整说明见 docs/site-design.md 末尾。
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new \
   --user-data-dir=/tmp/cprof --window-size=1100,1250 \
   --screenshot=/tmp/shot.png file:///path/to/index.html
@@ -471,27 +509,32 @@ CI 逻辑全在 YAML 的 `run: |` 里（含 `.github/actions/` 下复合 action 
 
 ```bash
 bash verify-site.sh            # 静态检查 + Release/tag 逻辑（30 项，几秒，不需要 typst）
-bash verify-site.sh --build    # 再加 ①~⑪ 的编译路径（共 86 项），和 CI 门禁完全同一条命令
+bash verify-site.sh --build    # 再加 ①~⑪ 的编译路径（共 109 项），和 CI 门禁完全同一条命令
 ```
 
-当前基线：`--build` 全绿 = **86 项通过**（静态 30 + 编译路径 56）。每项的完整说明、对抗验证
+当前基线：`--build` 全绿 = **109 项通过**（静态 30 + 编译路径 79）。每项的完整说明、对抗验证
 记录与手工核对流程见 docs/gate-design.md，这里只留索引：
 
-- ① 冷启动全量：产出 PDF 数、`.build-stamp`、首页卡片数、`icon.png` 进 `build/`、页脚时间戳
-  已注入、三个占位注释（SLIDES/COUNT/META）在产物里零残留
+- ① 冷启动全量：产出 PDF 数、`.build-stamp`、首页卡片数、`icon.png` 进 `build/`、
+  **封面缩略图数 = 套数且首页引用数一致**、**「最近更新」标记数 = 套数（夹具里每套 deck 都被显式提交成「刚刚」）**、
+  页脚时间戳已注入、**页脚有指向最新 Release 的链接**、三个占位注释（SLIDES/COUNT/META）在产物里零残留
 - ①b HTML 转义：标题含 `& < >` 的 deck，产物必须是实体、没有原始标签
-- ② 只改一个 deck 的增量；②b 非 ASCII 目录名的增量（钉住 `core.quotePath=false`，
-  背景见 docs/pitfalls.md）
-- ③ 删除 deck 后清理残留 PDF；④ 编译失败必须 `exit 1`
+- ② 只改一个 deck 的增量（**封面只重生成 1 张**）；②b 非 ASCII 目录名的增量（钉住
+  `core.quotePath=false`，背景见 docs/pitfalls.md）；②c **封面自愈**：PDF 复用、图缺了要补回来
+  且不重编 PDF
+- ③ 删除 deck 后清理残留 PDF **与对应的封面图**；④ 编译失败必须 `exit 1`
 - ⑤ 非法目录名必须 `exit 1`（空格 / 点号开头 / 含换行三种）；⑥ 一套都没有必须 `exit 1`
 - ⑦ 导航页边界：读不到 `/Count` 不渲染页数项（读得到必须渲染）、残留文件清掉而
-  `.build-stamp` 保留、`BUILD_DIR` 危险值全拒、正常值放行
+  `.build-stamp` **与 `covers/`** 保留（根级残留图片仍要清掉）、`BUILD_DIR` 危险值全拒、正常值放行、
+  **`RECENT_DAYS` 非 1–3650 的整数全拒（含空串与 `'14 days'`）**
 - ⑧/⑧b/⑧c Release/tag 逻辑（stub `gh`）：三种入口的 tag/managed、not found→`exists=false`、
   403 重试后 fail closed、旋钮防呆、机器标记决定 `ours`、说明里 tag 整体百分号编码且末尾带
   机器标记、「只更新附件」走 `gh release upload --clobber` 且无 PDF 必须 `exit 1`
 - ⑨ 事件维度：stamp 失配 / `workflow_dispatch` / 非 main push → 全量重编；
   ⑨b 编译环境哈希必须覆盖 `setup-fonts` 复合 action（改字体 = 全量重编）
-- ⑩ 列表顺序：最新在前、同日按名字升序、无日期排最后、日期不渲染进卡片区
+- ⑩ 列表顺序：最新在前、同日按名字升序、无日期排最后、日期不渲染进卡片区、
+  **旧 deck / 取不到日期时不得出现「最近更新」标记**、**没有封面图时不渲染 `<img>`**（该夹具
+  一张封面都没有；把导航页那个 `if [ -f … ]` 改成 `if true` 会画出 4 个破图而此前全绿）
 - ⑪ 样式表花括号平衡（静态计数，统计前去掉注释）
 
 **为什么这个门禁值得存在**：这些守的都是**静默失效**的不变量 —— stamp 基准错了会长期复用
@@ -508,7 +551,7 @@ bash verify-site.sh --build    # 再加 ①~⑪ 的编译路径（共 86 项）�
   写死过 `TYPST_VERSION`，后果实测很严重：workflow 一升级版本号，脚本造的 stamp 里的版本就和
   真正会写的那份不一致 → 走进「编译环境变了 → 全量」分支 → ②③ 的增量断言全挂。
   实测对比（把 workflow 的版本改成 9.9.9）：**写死版 2 通过 / 17 失败（exit 127）**，
-  读 env 版 **19 通过 / 0 失败**（当时还没加 env 断言，现在是 86 项）。这类假红比漏报更糟 —— 它会诱使人把测试改松。
+  读 env 版 **19 通过 / 0 失败**（当时还没加 env 断言，现在是 109 项）。这类假红比漏报更糟 —— 它会诱使人把测试改松。
 - **typst 包缓存要显式指定**：脚本默认 `TYPST_PACKAGE_CACHE_PATH="$TMP/typst-pkg"`
   （外部设了就尊重外部值）。typst 默认写 `$HOME`，HOME 不可写时每套 deck 都会报
   `failed to create temporary package directory` —— 看起来像 deck 坏了，是典型假红
@@ -518,6 +561,13 @@ bash verify-site.sh --build    # 再加 ①~⑪ 的编译路径（共 86 项）�
 - **夹具先做一次快照提交**：`fresh()` 复制完仓库会 `git add -A && commit` 一次。原因是工作树里
   未提交的改动（比如刚 `cp -R` 出来的新 deck）不在 `git diff <基准> HEAD` 里，会让 ② 的
   「复用 N-1」断言假红 —— 本地开发时几乎必然命中。
+- **夹具还要「让每套 deck 都刚刚提交过」**（`fresh()` 里紧接着的一步：给每个 `slides/*/main.typ`
+  追加一行注释并提交）。这是 ①「最近更新标记数 = 套数」的前提，**不能靠真实历史**：上面那次
+  快照提交在**干净工作树**（＝CI 检出的状态）上是空操作（`nothing to commit`，被 `|| true` 吞掉），
+  夹具于是继承真实提交日期 → 某套 deck 超过 RECENT_DAYS 没动过的那天起 ① 突然变红 → verify 失败
+  → `build: needs: verify` 把部署与发版一起卡死（独立复核实测：所有 deck 改成 20–25 天前、
+  工作树干净 → 期望 [2] 实际 [0]，98 通过 / 1 失败；补上后 109 通过 / 0 失败）。
+  **任何「夹具依赖当前时间/真实历史」的断言都要先想这件事**（完整记录见 docs/gate-design.md）。
 - **每次运行用独立临时目录**（`TMP="$(mktemp -d …)"` + `trap` 清理），不再写死 `/tmp/slides-verify`：
   写死时两个并发运行（本地跑一遍的同时另一个 agent 也在跑、或 CI 与本地同时跑）会互相
   `rm -rf` 掉对方的 `$TMP`，症状是后面莫名其妙的 `exit 127`、断言乱飞 —— 本轮真踩过，
@@ -555,7 +605,7 @@ bash verify-site.sh --build    # 再加 ①~⑪ 的编译路径（共 86 项）�
   跳过重编 —— 门禁反而制造了它本该防的那种不一致。
 - `build` 靠 `needs: verify` 依赖它，所以门禁红了站点和 Release 都不会动（fail closed）。
 - 门禁会自己触发全量重编：workflow 文件哈希进了 stamp，所以**改 workflow 必然全量编译**，
-  而门禁自己会把编译步真跑 **16 次**（每次编夹具里的若干套，见 `grep -c 'run_compile ' verify-site.sh`）。
+  而门禁自己会把编译步真跑 **17 次**（每次编夹具里的若干套，见 `grep -c 'run_compile ' verify-site.sh`）。
   这个成本只落在「改了 workflow」的 push 上，日常改 deck 不受影响。
 - 门禁 job 也装了字体（和 build 用**同一个复合 action** `setup-fonts`）。脚本要真编译含中文的
   deck，字体齐全才能保证不因环境差异假红。注意 **`--font-path` 是追加、不是限制**（实测带空
@@ -581,8 +631,16 @@ bash verify-site.sh --build    # 再加 ①~⑪ 的编译路径（共 86 项）�
 - ~~缓存 `@preview` 宏包~~（2026-10-11 已做：两个 job 都把 `cache-dependency-path` 指向构建时
   聚合出的 `preview-deps.typ`；verify job 里门禁通过显式设置 `TYPST_PACKAGE_CACHE_PATH`
   复用同一份缓存）。
-- 首页卡片已显示标题、副标题、页数、大小、文件名；还想要封面缩略图或每套 deck 的自定义
-  描述，可以在 index 生成步骤里扩展（缩略图可用 `typst compile --format png` 首先生成首几页）。
+- ~~首页封面缩略图~~（2026-10-17 已做：编译步产出 `build/covers/<名称>.png`，卡片行首显示
+  96×54 的小图，见 §4「增量编译」）。还想要的**每套 deck 自定义描述**仍未做：现在的描述行
+  直接取 `subtitle`，想让它和封面页的副标题分开，得在 workflow 里另加一个字段（A4 文档
+  用不了 `subtitle:`，见 §3.9）。
+- **首页的规模化改造**（2026-10-17 明确暂缓，等 deck 数涨上来再说，触发条件 ≈15 套）：
+  按年/主题分组（组标题用 `h2`）、客户端搜索/过滤框（会引入 JS，与「无 JS 也能看」的现状冲突）、
+  Atom 订阅（现在 Releases 页面已经能订阅，属重复建设）。现在只有 2 套，做了都是装饰。
+- 分享卡片：`<meta name="twitter:card">` 目前是 `summary`（没有配图）。想升级成
+  `summary_large_image` 需要一张 1200×630 的 `assets/og.png` + 绝对 URL 的 `og:image`，
+  并且要改 workflow 的静态资源拷贝（现在是写死的 `cp assets/icon.png` + fail-closed 检查）。
 - `fonts-noto-cjk-extra` 需要时加回即可（换更多中文字重）。
 - 代码字体目前只装 **Regular**（和作者本机 `~/Library/Fonts/` 里那一份一致）。若以后要用粗体代码，
   在复合 action 的 `unzip` 成员里加上 `MapleMonoNormal-NF-CN-Bold.ttf`、并在 workflow 顶部 `env:`

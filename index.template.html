@@ -12,6 +12,10 @@
       COUNT 现在**模板里没有用到**（标题旁的套数已去掉），workflow 的替换规则留着 ——
       想恢复显示就把它写回 h1 里，不用碰 YAML。
       其中 SLIDES 是服务端渲染出来的幻灯片卡片，所以不依赖 JS；JS 只负责深浅色。
+      卡片结构（由 workflow 的 heredoc 生成）：`.deck > img.cover（构建时产出的封面缩略图）
+      + .deck-main（.deck-title > 标题 / .dot / .ext，可选 .deck-desc，.deck-meta）`。
+      封面缩略图不在模板里、也不在仓库里：编译步跑 `typst compile --format png --ppi 32
+      --pages 1` 产出 build/covers/<名称>.png，导航页只负责引用。
       主题是三态循环，右上角按钮依次切 auto → 浅色 → 深色 → auto：
         * auto（默认）：每次加载都重新读浏览器的 prefers-color-scheme，系统切换时实时跟随；
         * 浅色 / 深色：用户明确选过才写进 localStorage 固定下来（auto 会清掉那个键）。
@@ -171,45 +175,59 @@
            （线离内容比行距还近），层级就发黏了。 */
         margin-bottom: 1.5rem;
       }
+      /* **一行到底**（2026-10 改）：头像 + 主标题 + 右上角按钮在所有宽度下都是同一行，
+         窄屏只是把头像（48px）与标题（1.25rem）收小一档。
+         改之前基准是「纵向堆叠、≥640px 才转横向」，结果窄屏下 `.head-row` 高 176.4px
+         （实测 500px 视口：头像 64 + 标题 38.4 + 按钮 32 + 两个 0.5rem gap = 150.4，
+         多出来的 ~26px 是 `.spacer{flex:1}` 在**纵向**也参与分配撑开的），
+         第一张卡片被压到 y=220；改后同一条件 `.head-row` 高 **62px**、卡片从 y=98 开始。
+         窄屏单行放得下的前提是标题固定为 `Slides`（很短）：若以后把 `.page-title` 改成
+         长标题，先在这个断点验一遍会不会挤掉右侧按钮。 */
       .head-row {
         display: flex;
-        flex-direction: column;
+        flex-direction: row;
         align-items: center;
         gap: 0.5rem;
         padding-bottom: 1rem;
         /* **2px，行线是 1px** —— 两条线必须"重量"不同，这是区块边界与条目分隔的分层手段。
            原来两条都是 1px + 同色，只有"两端渐隐"这点差别（肉眼看不出来），所以页眉线看着
            跟行线同一级（用户 2026-10 提的「显示效果也差不多」）。
-           配合 `header` 的 margin-bottom 后实测：线在 64px 头像之下 18px、到第一行墨迹
-           42px（页眉区最高的元素是头像，不是 1.5rem 的标题——按标题的行盒算会得出 30.8px，
-           那 12px 是 h1 行高里上下各约 7px 的 half-leading，不是观感距离）。 */
+           配合 `header` 的 margin-bottom 后实测（≥640px、64px 头像）：线在头像之下 18px、
+           到第一行墨迹 42px（页眉区最高的元素是头像，不是 1.5rem 的标题——按标题的行盒算
+           会得出 30.8px，那 12px 是 h1 行高里上下各约 7px 的 half-leading，不是观感距离）。 */
         border-bottom: 2px solid hsl(var(--border));
       }
       @media (min-width: 640px) {
         .head-row {
-          flex-direction: row;
-          /* 居中对齐：80px 的头像和一行标题按底对齐会显得标题在往下掉 */
-          align-items: center;
           gap: 0;
         }
       }
       .avatar {
-        height: 64px;
-        width: 64px;
+        /* 窄屏 48px / ≥640px 64px（img 的 width/height 属性仍写 64：
+           那是样式表没生效时的兜底尺寸，见 docs/site-design.md） */
+        height: 48px;
+        width: 48px;
         flex: none;
         border-radius: 9999px;
         transition: transform 0.3s ease;
       }
+      @media (min-width: 640px) {
+        .avatar {
+          height: 64px;
+          width: 64px;
+        }
+      }
       .avatar:hover {
         transform: rotate(180deg);
       }
-      /* 页面主标题（h1）。字号比原来的区块标题大一档，因为现在它就是这一页的标题。 */
+      /* 页面主标题（h1）。字号比原来的区块标题大一档（窄屏 1.25rem / ≥640px 1.5rem），
+         因为现在它就是这一页的标题。 */
       .page-title {
         display: flex;
         align-items: center;
         gap: 0.5rem;
         margin: 0;
-        font-size: 1.5rem;
+        font-size: 1.25rem;
         /* 字重 **500 = 意图 medium**：这套字体栈只有 regular + bold 两档（实测 400 与 500
            渲染完全一致、600 与 700 都是 bold），medium 在这套字体里根本不存在。写 500 在本机
            落 regular，将来若自持 Roboto Mono Variable 就自然变成真 medium。
@@ -225,6 +243,7 @@
       @media (min-width: 640px) {
         .page-title {
           margin-left: 1.5rem;
+          font-size: 1.5rem;
         }
       }
       .spacer {
@@ -312,13 +331,17 @@
          span 会被 blockify，下划线照样画进来（踩坑记录见 docs/site-design.md）。 */
 
       /* ---------- 幻灯片列表 ---------- */
-      /* 版式是「纯列表」：一行一套，行内标题/副标题/元信息，行间一条细线。三件**别改**的事：
+      /* 版式是「小封面 + 纯列表」：一行一套，行首一张 96×54 的封面缩略图，右侧标题/副标题/
+         元信息，行间一条细线。四件**别改**的事：
            * 行内不要再加色条（原站那根红条是**分组标题**的标记，按行复制就成了满屏粉条）；
            * hover 必须是**整行**（`.deck` 是 `width: 100%`）—— 有了行线之后，贴合式灰块的
              右边缘和行线对不齐就是"脏"；
            * 顺序「最新在前」由 workflow 按 git 提交日期在构建时排好，**日期不上页面**
-             （它说的是"这套 deck 上次提交"，不是内容日期；真想透出"新旧"，更轻的做法是给
-             最近改过的行加个小圆点，而不是恢复整列日期）。
+             （它说的是"这套 deck 上次提交"，不是内容日期；要透出"新旧"只用 `.dot` 小圆点，
+             别恢复整列日期）；
+           * 封面缩略图由**编译步**产出（`typst compile --format png --ppi 32 --pages 1` →
+             `build/covers/<名称>.png`，374×210、约 3–6 KB），导航页只负责引用，模板里没有它。
+             删掉那张图不会报错，只会让每行少一张图 —— 门禁 ① 钉着「每套一张 + 引用数一致」。
          完整的历史与外部依据见 docs/site-design.md。 */
       .deck {
         position: relative;
@@ -335,6 +358,32 @@
         padding: 0.9375rem 0.5rem 0.875rem;
         border-radius: var(--radius);
         transition: background-color 0.3s ease;
+      }
+      /* 行首封面缩略图。三处刻意的选择：
+         * `object-fit: contain` 而不是 `cover`：仓库允许 A4 / 非 16:9 文档（AGENTS.md §3.9），
+           `cover` 会把竖版页面裁成一条横带；`contain` 对 16:9 完全等价，对竖版是留边不裁切，
+           留边处露出 `--secondary` 底色。
+         * `align-self: center`：`.deck` 没写 align-items，默认 `stretch` 会把图盒拉到整行高
+           （图本身仍因 contain 不变形，但会多出一圈底色，看着像个大灰块）。
+         * 宽度窄屏 72px / ≥640px 96px；`height: auto` + `aspect-ratio` 是必须的 —— 不然
+           `<img>` 上的 `height="54"` 属性（无 CSS 时的兜底）会在窄屏把图压扁。 */
+      .cover {
+        flex: none;
+        align-self: center;
+        width: 96px;
+        height: auto;
+        aspect-ratio: 16 / 9;
+        object-fit: contain;
+        background: hsl(var(--secondary));
+        border: 1px solid hsl(var(--border));
+        border-radius: 6px;
+        margin-right: 1rem;
+      }
+      @media (max-width: 639px) {
+        .cover {
+          width: 72px;
+          margin-right: 0.75rem;
+        }
       }
       /* 行与行之间一条**两端渐隐**的细线（2026-10 定稿）。
          只能用伪元素 + `background-image`：`.deck` 是圆角盒子，`border-top` 会在两端跟着圆角
@@ -403,6 +452,24 @@
       .deck:focus-within .deck-title .ext {
         opacity: 1;
         transform: translateX(0);
+      }
+      /* 「最近更新」小圆点（构建时按 git 相对时间判断，见 workflow 导航页步骤与
+         docs/site-design.md）：只给最近 RECENT_DAYS（默认 3）天内改过的 deck 加；
+         **取不到提交日期时不加**（浅克隆 / 从未提交 —— fail safe，宁可没有圆点，
+         也不要把整套 deck 都标成「最近更新」）。
+         两个实现要点：
+         * `.deck-title` 是 inline-flex，**flex item 之间的空白会被忽略** —— 所以圆点必须
+           自己带 `margin-left`，靠换行/空格是分不开的；
+         * 圆点是纯装饰（信息由紧随其后的 `.sr-only` 文本承担），所以 `aria-hidden="true"`，
+           别只给它一个颜色就完事。 */
+      .dot {
+        flex: none;
+        align-self: center;
+        width: 6px;
+        height: 6px;
+        margin-left: 0.5rem;
+        border-radius: 9999px;
+        background: var(--accent-blue);
       }
       .deck-desc {
         margin-top: 0.5rem;

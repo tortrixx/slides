@@ -41,6 +41,11 @@ env:
   BUILD_DIR: build
   # 按日期发版时用哪个时区决定 tag 里的日期（想用 UTC 就写 UTC）
   RELEASE_TZ: "Asia/Shanghai"
+  # 首页卡片上「最近更新」小圆点的判定窗口（天）。导航页步骤用
+  # `git log --since="${RECENT_DAYS} days ago"` 判断（交给 git 做相对时间，不自己解析日期：
+  # BSD/GNU 的 `date -d` 不通用，是本仓库踩过的坑）。改这个值 = workflow 哈希变 = 下一次
+  # push 全量重编一次，这是本仓库的既定语义。
+  RECENT_DAYS: "3"
   # 代码块（raw）用的字体：Maple Mono Normal NF。Ubuntu 源里没有这个字体，从上游 Release
   # 固定版本下载。版本 + 两个 sha256 都钉死，理由和 TYPST_VERSION 一样：字体换了排版就会变，
   # 而这些值写在 workflow 文件里 → workflow 哈希变 → .build-stamp 失配 → 自动全量重编一次。
@@ -194,8 +199,24 @@ jobs:
           fi
           TZ="$tz" date +%Y.%m.%d >/dev/null 2>&1 \
             || { echo "::error::RELEASE_TZ 非法（'${tz}'）：date 无法使用该时区"; exit 1; }
+          # RECENT_DAYS 决定首页「最近更新」圆点的窗口，会原样拼进
+          # `git log --since="${RECENT_DAYS} days ago"`。**必须显式校验**：值写错（'abc'、空、
+          # 负数、带单位）时 git 不报错、只是把 --since 解析成一个过去的/无效的时间点，
+          # 结果是**圆点一个都不出现、CI 全绿**（实测 'abc' → 0 个圆点、rc=0）——
+          # 又一个静默失效。所以只接受 1–3650 的正整数，其余 fail closed。
+          # 注意用的是 `${RECENT_DAYS-3}`（**不带冒号**）：变量**未设置**时取默认 3
+          # （导航页那步也是这个兜底，两边一致；门禁里有用最小 env 跑这一步的正对照），
+          # 但**显式设成空串**（`RECENT_DAYS: ""`）会被下面拦下 —— 那是配置写漏，不是"没配"。
+          days="${RECENT_DAYS-3}"
+          case "$days" in
+            ''|*[!0-9]*)
+              echo "::error::RECENT_DAYS 非法（'${days}'）：必须是正整数（天数）"; exit 1 ;;
+          esac
+          if [ "$days" -lt 1 ] || [ "$days" -gt 3650 ]; then
+            echo "::error::RECENT_DAYS 非法（'${days}'）：必须在 1–3650 之间"; exit 1
+          fi
 
-          echo "BUILD_DIR=${BUILD_DIR}（归一化后 '${norm}'） TYPST_VERSION=${TYPST_VERSION} RELEASE_TZ=${tz}"
+          echo "BUILD_DIR=${BUILD_DIR}（归一化后 '${norm}'） TYPST_VERSION=${TYPST_VERSION} RELEASE_TZ=${tz} RECENT_DAYS=${days}"
 
       # 同 verify job：把所有 deck 的 @preview import 汇总成一个可编译的 .typ，
       # 给 setup-typst 的 cache-dependency-path 当缓存 key 的哈希输入（细节见 verify job 同名单步）。
@@ -254,6 +275,10 @@ jobs:
 
           build_dir="$PWD/$BUILD_DIR"
           mkdir -p "$build_dir"
+          # 首页卡片的封面缩略图放这里（compile 步产出，导航页只负责引用）。
+          # 单独一个子目录，是为了让「站点静态资源」与「各 deck 的派生图」不混在同一层命名空间里；
+          # 导航页那步的旧文件清理要把 `covers` 加进白名单，否则整个目录每次都会被 rm -rf。
+          mkdir -p "$build_dir/covers"
 
           # ---------- 1) 判断这次是增量还是全量 ----------
           # 复用基准是「上一次真正编译成功时的提交」，记在缓存目录里的 .build-stamp，
@@ -372,14 +397,37 @@ jobs:
               if (cd "$dir" && typst compile main.typ "$build_dir/$name.pdf"); then
                 echo "✅ $name → $BUILD_DIR/$name.pdf"
                 rebuilt=$((rebuilt + 1))
+                need_cover=1
               else
                 echo "::error::幻灯片 $name 编译失败，请检查 ${dir}main.typ"
                 failed=1
+                need_cover=0
               fi
               echo "::endgroup::"
             else
               echo "⏭️  $name 没有改动，复用 $BUILD_DIR/$name.pdf"
               reused=$((reused + 1))
+              # 复用旧 PDF，但封面图不在（老缓存 / 缓存被清理 / 本功能刚上线）时补生成一张：
+              # 只重生成图、不重编 PDF —— 既自愈又不破坏增量编译。
+              need_cover=0
+              [ -f "$build_dir/covers/$name.png" ] || need_cover=1
+            fi
+
+            # ---------- 封面缩略图（首页卡片用） ----------
+            # 只编第一页、--ppi 32（16:9 出来是 374×210、约 3–6 KB；实测 26-09-30 3989 B、
+            # template 5783 B）。排版成本与一次 PDF 编译同量级，所以只为「这次真编过的」
+            # deck 生成。
+            # **fail closed**：图生成失败就整步失败。缺封面时页面不会报错、只是图没了
+            # （导航页那边文件不存在就不输出 <img>），属于最难发现的坏法。
+            # 若哪天 typst 要求输出模式里带 {p}，就改成 "$name-{p}.png" 并同步导航页的引用
+            # （门禁 ① 钉着「每套 deck 一张封面、首页引用数一致」）。
+            if [ "$need_cover" -eq 1 ]; then
+              if (cd "$dir" && typst compile --format png --ppi 32 --pages 1 main.typ "$build_dir/covers/$name.png"); then
+                echo "🖼️  $name → $BUILD_DIR/covers/$name.png"
+              else
+                echo "::error::幻灯片 $name 的封面图生成失败（typst --format png --pages 1）"
+                failed=1
+              fi
             fi
           done
 
@@ -390,6 +438,18 @@ jobs:
             if ! grep -qxF -- "$n" "$names_file"; then
               echo "🧹 删除已不存在的幻灯片产物：$n.pdf"
               rm -f "$pdf"
+            fi
+          done
+
+          # 封面图同理：deck 被删掉 / 改名后，build/covers/ 里的旧图也要一起清掉，
+          # 否则它会随缓存与 Pages 产物一直带下去、首页上留着已经不存在的 deck 的封面。
+          # 必须在下面 `rm -f "$names_file"` **之前**跑（两个循环共用这份名单）。
+          for cover in "$build_dir"/covers/*.png; do
+            [ -e "$cover" ] || continue
+            n="$(basename "$cover" .png)"
+            if ! grep -qxF -- "$n" "$names_file"; then
+              echo "🧹 删除已不存在的幻灯片封面：$n.png"
+              rm -f "$cover"
             fi
           done
           rm -f "$names_file"
@@ -424,14 +484,15 @@ jobs:
           # 故意做成 fail closed：文件不在时页面不会报错，只是那张图被 onerror 静默删掉，
           # 属于最难发现的坏法 —— 宁可整次构建失败。
           #
-          # 先清掉 build/ 里「非 PDF、非 index.html、非 .build-stamp」的旧文件：build/ 是
-          # actions/cache 的缓存对象，只清 *.pdf 的话，某个版本拷进来、后来不再拷的静态资源会
-          # **永久**被缓存带下去（自愈不了）。三个通配符分别覆盖普通文件、单点隐藏文件、
-          # `..` 开头的隐藏文件；.build-stamp 是下次增量编译的基准，必须留下。
+          # 先清掉 build/ 里「非 PDF、非 index.html、非 .build-stamp、非 covers/」的旧文件：
+          # build/ 是 actions/cache 的缓存对象，只清 *.pdf 的话，某个版本拷进来、后来不再拷的
+          # 静态资源会**永久**被缓存带下去（自愈不了）。三个通配符分别覆盖普通文件、单点隐藏
+          # 文件、`..` 开头的隐藏文件；.build-stamp 是下次增量编译的基准、covers/ 是编译步产出的
+          # 封面缩略图目录（删了首页就全是没有封面的空行），两者都必须留下。
           for stale in "$BUILD_DIR"/* "$BUILD_DIR"/.[!.]* "$BUILD_DIR"/..?*; do
             [ -e "$stale" ] || continue
             case "$(basename "$stale")" in
-              *.pdf | index.html | .build-stamp) ;;
+              *.pdf | index.html | .build-stamp | covers) ;;
               *) echo "🧹 删除 build/ 里已不再生成的旧文件：$(basename "$stale")"; rm -rf "$stale" ;;
             esac
           done
@@ -502,6 +563,19 @@ jobs:
 
             subtitle="$(pick "$main_typ" subtitle)"
 
+            # 「最近更新」小圆点（docs/site-design.md 里就写着：想透出"新旧"，比恢复整列日期
+            # 更轻的做法是给最近改过的行加个小圆点）。判定交给 git 自己做相对时间：
+            # `--since` 过滤掉更早的提交，输出非空 ⇒ 这套 deck 最近改过。
+            # **不自己解析日期**：BSD 的 `date -j -f` 与 GNU 的 `date -d` 不通用，本仓库踩过。
+            # 条件里要求 `$modified` 非空是**故意的 fail safe**：取不到提交日期（浅克隆等）时
+            # 不标记 —— 否则会把整套 deck 都标成「最近更新」，那比没有标记更误导人。
+            # 门禁 ⑩ 规定 <main> 里不许出现 YYYY-MM-DD，所以标记只能是圆点 + 文案，不带日期。
+            fresh_mark=""
+            if [ -n "$modified" ] \
+              && [ -n "$(git log -1 --since="${RECENT_DAYS:-3} days ago" --format=%H -- "slides/$name/")" ]; then
+              fresh_mark="<span class=\"dot\" aria-hidden=\"true\"></span><span class=\"sr-only\">最近更新</span>"
+            fi
+
             bytes="$(wc -c < "$pdf" | tr -d ' ')"
             # 1 KB 以下显示 B；不到 1 MiB 的用 KB（封顶 1023，免得 1048575 被四舍五入成 "1024 KB"）
             size="$(awk -v b="$bytes" 'BEGIN { if (b < 1024) { printf "%d B", b } else if (b < 1048576) { kb = b / 1024; if (kb > 1023) kb = 1023; printf "%.0f KB", kb } else { printf "%.1f MB", b / 1048576 } }')"
@@ -533,12 +607,23 @@ jobs:
               desc_html="<div class=\"deck-desc\">$(printf '%s' "$subtitle" | escape)</div>"
             fi
 
+            # 封面缩略图（编译步产出 build/covers/<名称>.png）。文件不在时**整个 <img> 都不输出**，
+            # 与「读不到 /Count 就不渲染页数」同一个风格：宁可少一张图，也不要一个坏图。
+            # alt 留空：标题就在紧隔壁，这张图是纯装饰（读屏软件不必念它）。
+            # width/height 属性写 CSS 像素尺寸（96×54，与窄屏断点无关）：图没加载时行高不跳动。
+            cover_html=""
+            if [ -f "$BUILD_DIR/covers/$name.png" ]; then
+              cover_html="<img class=\"cover\" src=\"covers/${name_html}.png\" alt=\"\" width=\"96\" height=\"54\" loading=\"lazy\" decoding=\"async\" />"
+            fi
+
             # 卡片结构对应 index.template.html 里的 .deck 样式
             cat <<HTML >> "$items"
                   <div class="deck fade" style="--i: $count">
+                    ${cover_html}
                     <div class="deck-main">
                       <a class="deck-title" href="${name_html}.pdf" target="_blank" rel="noopener noreferrer">
                         ${title_html}
+                        ${fresh_mark}
                         <svg class="ext" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6" /><path d="M10 14 21 3" /><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /></svg>
                       </a>
                       ${desc_html}
@@ -563,10 +648,13 @@ jobs:
           fi
 
           # ---------- 2) 把生成结果套进模板 ----------
-          # 只写这个时间戳（页脚显示「更新于 …」）：这是**构建**时间，不是每套幻灯片的内容时间
+          # 页脚 = 时间戳 + 「全部 PDF」链接。时间戳是**构建**时间，不是每套幻灯片的内容时间
           # （改一套 deck 也会让首页时间戳刷新），所以不配提交号，免得被读成「最新内容就是这个
-          # 提交」。改文案时记得门禁只断言「页脚有一个 YYYY-MM-DD HH:MM」，不绑具体措辞。
-          meta="更新于 $(TZ="${RELEASE_TZ}" date '+%Y-%m-%d %H:%M')"
+          # 提交」。改文案时记得门禁只断言「页脚有一个 YYYY-MM-DD HH:MM」、不绑具体措辞。
+          # 那个链接指向当天的 Release（release job 汇总了全部 PDF），**不需要新增任何 CI 逻辑**。
+          # **注意**：`awk` 的 `sub()` 替换串里 `&` 表示「匹配到的文本」、有特殊含义，
+          # 所以 meta 文案里不要出现 `&`（真要写就写成 `\&`）。
+          meta="更新于 $(TZ="${RELEASE_TZ}" date '+%Y-%m-%d %H:%M') · <a href=\"https://github.com/tortrixx/slides/releases/latest\" target=\"_blank\" rel=\"noopener noreferrer\">全部 PDF</a>"
 
           awk -v items="$items" -v count="$count" -v meta="$meta" '
             /<!--SLIDES-->/ { while ((getline line < items) > 0) print line; close(items); next }

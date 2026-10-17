@@ -22,12 +22,14 @@
 
 // config-info 里的元信息会同时用于封面页和首页卡片：
 // 首页卡片取的是 title / subtitle 这两项，副标题不写就不显示那一行（见 AGENTS.md）。
+// 这套模板本身也是一套会被编译上站点的 deck，所以这里写的是**真文案**而不是 title/author
+// 这类占位符 —— 占位符会让首页卡片和封面都印着「title」两个字。复制本文件夹后记得整段换掉。
 #show: metropolis-theme.with(
   aspect-ratio: "16-9",
   config-info(
-    title: [title],
-    subtitle: [],
-    author: [author],
+    title: [幻灯片模板],
+    subtitle: [复制本文件夹即可新建一套幻灯片],
+    author: [tortrixx],
     date: datetime.today(),
   ),
   // footer-progress: false,   // 去掉底部进度条

@@ -54,12 +54,17 @@ wf_env() {
 TYPST_VERSION="$(wf_env TYPST_VERSION)"
 RELEASE_TZ="$(wf_env RELEASE_TZ)"
 BUILD_DIR="$(wf_env BUILD_DIR)"
+# RECENT_DAYS 也要从 YAML 读、并传给导航页那步：不读的话门禁永远只测到脚本里的
+# `${RECENT_DAYS:-3}` 兜底值，workflow 里写成 'abc' 也能全绿（实测），而线上是
+# **一个圆点都不出现**的静默失效。
+RECENT_DAYS="$(wf_env RECENT_DAYS)"
 if [ -n "$TYPST_VERSION" ] && [ -n "$BUILD_DIR" ]; then
-  ok "从 workflow 读到 env：TYPST_VERSION=$TYPST_VERSION BUILD_DIR=$BUILD_DIR"
+  ok "从 workflow 读到 env：TYPST_VERSION=$TYPST_VERSION BUILD_DIR=$BUILD_DIR RECENT_DAYS=${RECENT_DAYS:-（空）}"
 else
   bad "没读到 workflow 的 env（TYPST_VERSION/BUILD_DIR），脚本和工作流可能已脱节"
   TYPST_VERSION="${TYPST_VERSION:-0.15.1}"; BUILD_DIR="${BUILD_DIR:-build}"
 fi
+RECENT_DAYS="${RECENT_DAYS:-3}"
 RELEASE_TZ="${RELEASE_TZ:-Asia/Shanghai}"
 
 echo "── 1) 从 YAML 抽出 run: 脚本 ──"
@@ -281,7 +286,7 @@ run_compile() { ( cd "$1" && RUNNER_TEMP="$2" BUILD_DIR="$BUILD_DIR" TYPST_VERSI
     RELEASE_TZ="$RELEASE_TZ" GITHUB_EVENT_NAME="${4:-push}" GITHUB_REF="${5:-refs/heads/main}" \
     GITHUB_SHA="${3:-$(git rev-parse HEAD 2>/dev/null || echo nosha)}" bash "$COMPILE" ); }
 run_index() { ( cd "$1" && RUNNER_TEMP="$2" BUILD_DIR="$BUILD_DIR" TYPST_VERSION="$TYPST_VERSION" \
-    RELEASE_TZ="$RELEASE_TZ" bash "$INDEX" ); }
+    RELEASE_TZ="$RELEASE_TZ" RECENT_DAYS="$RECENT_DAYS" bash "$INDEX" ); }
 # 与 workflow 编译步骤的「编译环境哈希」算法保持一致：workflow + 装字体的复合 action
 # 两个文件一起哈希。两边只要有一处对不上，②⑨ 就会走进「环境变了 → 全量」分支而**假红**
 # （这门门禁自己的 TYPST_VERSION 写死翻车史见 §6 的鲁棒性约定 —— 同一个教训）。
@@ -294,6 +299,18 @@ fresh() {
   # 快照一次：工作树里未提交的改动（新增了 deck 目录等）不会出现在 `git diff <基准> HEAD` 里，
   # 会让 ② 的「改了一套 → 复用 N-1」断言假红。先提交副本里的现状，基准才与内容一致。
   ( cd "$1" && git add -A && git -c user.email=v@x -c user.name=v commit -qm "fixture snapshot" ) >/dev/null 2>&1 || true
+  # 让每套 deck 都「**刚刚**提交过」—— 这是 ①「最近更新标记数 = 套数」的前提，而它**不能靠
+  # 真实历史**：上面那次快照提交在**干净工作树**上是个空操作（nothing to commit，被 `|| true`
+  # 吞掉），而 CI 的检出就是干净的 —— 夹具于是继承仓库真实提交日期。后果是「某套 deck 超过
+  # RECENT_DAYS 没动过」的那天起，① 会突然变红 → verify 失败 → `build: needs: verify` 把
+  # 部署和发版一起卡死（实测：把副本里所有 deck 的提交日期改成 20–25 天前、工作树干净 →
+  # 「① 最近更新标记数：期望 [2]，实际 [0]」，98 通过 / 1 失败）。**假红比漏报更糟**，
+  # 所以这里显式给每套 deck 追加一行注释并提交：内容照样可编译，路径历史被刷新成「刚刚」。
+  for d in "$1"/slides/*/; do
+    [ -f "${d}main.typ" ] || continue
+    printf '\n// fixture: freshly committed（门禁夹具专用，见 verify-site.sh 的 fresh()）\n' >> "${d}main.typ"
+  done
+  ( cd "$1" && git add -A && git -c user.email=v@x -c user.name=v commit -qm "fixture: make every deck freshly committed" ) >/dev/null 2>&1 || true
 }
 
 # typst 默认把包缓存写到 $HOME；HOME 不可写（沙箱 / 受限 runner）时每套 deck 都会报
@@ -317,6 +334,16 @@ chk "① 首页卡片数" "$(grep -c 'class="deck fade"' "$R/build/index.html")"
 # 头像等站点资源是「生成导航页」那步从 assets/ 拷进 build/ 的：漏拷不会报错，
 # 只是 img 被 onerror 静默删掉，所以这里钉一下产物里确实有它
 chk "① 站点资源 icon.png 已进 build/" "$([ -f "$R/build/icon.png" ] && echo yes || echo no)" yes
+# 封面缩略图：编译步对每套 deck 跑 `typst compile --format png --ppi 32 --pages 1` 产出
+# build/covers/<名称>.png，导航页只负责引用。两面都钉：
+#   ① 每套一张（数量从夹具推导）；
+#   ② 首页里的引用数一致 —— 少了图页面**不会报错**，只是每行少一张图，属于静默失效。
+# 期望数都用 $n_decks，不写死（理由同上面那条）。
+chk "① 封面缩略图数 = 套数" "$(ls "$R"/build/covers/*.png 2>/dev/null | wc -l | tr -d ' ')" "$n_decks"
+chk "① 首页引用的封面数 = 套数" "$(grep -c 'class="cover"' "$R/build/index.html" || true)" "$n_decks"
+# 「最近更新」小圆点：夹具里的 deck 都是 fresh() 刚提交的（提交日期=今天），所以每张卡片
+# 都该有。反方向（旧 deck / 取不到日期时**不能**有）由 ⑩ 的 R10 夹具钉着。
+chk "① 最近更新标记数 = 套数（夹具都是刚提交的）" "$(grep -c 'class="dot"' "$R/build/index.html" || true)" "$n_decks"
 # 占位注释必须被**消费掉**：token 拼对了、但 workflow 那侧的 awk 规则被删/改名时，那一行会
 # 原样留在产物里（HTML 注释在页面上根本看不见，连症状都没有）—— 属于典型「门禁假绿」区。
 # **它不管什么**：token 自己拼错（比如写成 `<!--SLIDE-->`）时残留 grep 是空的，那种由上面
@@ -337,6 +364,12 @@ footer_html="$(sed -n '/<footer/,/<\/footer>/p' "$R/build/index.html")"
 if grep -qE '[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}' <<<"$footer_html"; then
   ok "① 页脚时间戳已注入（META 占位符生效）"
 else bad "① 页脚没有 YYYY-MM-DD HH:MM 时间戳：META 占位符被改名/拼错，或时间格式被改了"; fi
+# 页脚那个「全部 PDF」链接（指向当天 Release，release job 汇总了全部 PDF）。
+# 只钉**结构**（页脚里有一个指向 releases/latest 的链接），不钉文案 —— 文案是随时会改的
+# 展示措辞，钉死它就是制造假红（「更新于」那次改名已经吃过一回，见上面那条注释）。
+if grep -q 'href="https://github.com/tortrixx/slides/releases/latest"' <<<"$footer_html"; then
+  ok "① 页脚有指向最新 Release 的「全部 PDF」链接"
+else bad "① 页脚缺少指向 releases/latest 的链接（全部 PDF 的入口没了）"; fi
 
 # ①b HTML 转义：title/subtitle 来自可编辑的 main.typ，转义护栏一旦回归就会在站点上执行注入。
 # 造一个带 & < > 的标题，断言产物里是实体、且没有原始标签。
@@ -367,6 +400,17 @@ chk "② 增量：exit" "$rc" 0
 if grep -q '增量编译' <<<"$out"; then ok "② 走了增量"; else bad "② 没走增量"; fi
 chk "② 复用的套数" "$(grep -c '没有改动，复用' <<<"$out")" "$((n_decks - 1))"
 chk "② 重编的套数" "$(grep -c '✅' <<<"$out")" 1
+# 封面缩略图必须跟着增量走：只有**这次真编过**的那套重生成（日志里的 🖼️），复用的那套
+# 直接用缓存里的图 —— 每套都重生成的话，增量编译省下的时间会被缩略图吃掉一半。
+chk "② 封面只重生成 1 张（跟着增量走）" "$(grep -c '🖼️' <<<"$out")" 1
+
+# ②c 封面自愈：PDF 在缓存里、封面图不在（老缓存 / 缓存被清理 / 本功能刚上线）时，
+# 只补图、不重编 PDF。没有这条自愈，首页会一直缺图且**永远不会自己好**。
+rm -f "$R/build/covers/template.png"
+capture run_compile "$R" "$T" "$(cd "$R" && git rev-parse HEAD)"
+chk "②c 封面自愈：exit" "$rc" 0
+chk "②c 缺图的那套没被重编（仍复用 PDF）" "$(grep -c '没有改动，复用' <<<"$out")" "$n_decks"
+chk "②c 封面补回来了" "$([ -f "$R/build/covers/template.png" ] && echo 在 || echo 没了)" 在
 
 # ②b 非 ASCII 文件夹名（§3.8 允许汉字名）的增量。
 # git diff 默认 core.quotePath=true，会把 slides/中文甲/main.typ 输出成带引号 + 八进制转义的
@@ -388,6 +432,10 @@ capture run_compile "$R" "$T"
 chk "③ 删除后清理：exit" "$rc" 0
 chk "③ 残留 template.pdf" "$([ -f "$R/build/template.pdf" ] && echo 还在 || echo 已删)" 已删
 chk "③ 其余 PDF 保留" "$([ -f "$R/build/26-09-30.pdf" ] && echo 在 || echo 没了)" 在
+# 封面图也要跟着清：漏了它，被删掉的 deck 会把自己的封面永久留在缓存与站点上
+# （首页不再引用它，但 build/covers/ 里会一直躺着、并随 Pages 产物发布出去）。
+chk "③ 残留 template 封面" "$([ -f "$R/build/covers/template.png" ] && echo 还在 || echo 已删)" 已删
+chk "③ 其余封面保留" "$([ -f "$R/build/covers/26-09-30.png" ] && echo 在 || echo 没了)" 在
 
 R2="$TMP/repo-fail"; fresh "$R2"
 printf '#set page(paper: "a4")\n= 坏的\n#undefined-fn-xyz()\n' > "$R2/slides/26-09-30/main.typ"
@@ -430,12 +478,18 @@ R5="$TMP/repo-nav"; fresh "$R5"
 printf 'not a real pdf, no /Count here\n' > "$R5/build/template.pdf"   # 故意让 /Count 读不到
 printf 'stale\n' > "$R5/build/stale.html"                              # 上一轮残留的非 PDF 文件
 printf 'stale\n' > "$R5/build/.stale-hidden"                           # 隐藏的残留文件
+printf 'stale\n' > "$R5/build/avatar-old.png"                          # 根级残留图片：仍然要清掉
+mkdir -p "$R5/build/covers" && printf 'png\n' > "$R5/build/covers/template.png"  # 封面目录：必须留下
 printf 'sha ver wf\n' > "$R5/build/.build-stamp"                       # 增量基准，必须留下
 capture run_index "$R5" "$T"
 chk "⑦ 导航页：读不到 /Count 也必须成功" "$rc" 0
 chk "⑦ 残留的非 PDF 文件被清掉" "$([ -f "$R5/build/stale.html" ] && echo 还在 || echo 已删)" 已删
 chk "⑦ 隐藏的残留文件也被清掉" "$([ -f "$R5/build/.stale-hidden" ] && echo 还在 || echo 已删)" 已删
 chk "⑦ .build-stamp 必须保留" "$([ -f "$R5/build/.build-stamp" ] && echo 在 || echo 没了)" 在
+# 白名单里加的是**目录名 `covers`**、不是 `*.png`：根级残留图片照旧要清掉，
+# 而封面目录要留下（被当成旧文件 rm -rf 的话，首页每行都会变成没有封面的空行）。
+chk "⑦ 根级残留图片仍然被清掉" "$([ -f "$R5/build/avatar-old.png" ] && echo 还在 || echo 已删)" 已删
+chk "⑦ covers/ 目录必须保留" "$([ -f "$R5/build/covers/template.png" ] && echo 在 || echo 没了)" 在
 chk "⑦ 站点资源仍然拷进 build/" "$([ -f "$R5/build/icon.png" ] && echo yes || echo no)" yes
 # 读不到 /Count 时不该冒出「只有『页』字的空胶囊」——整枚 badge 都不输出
 if grep -q ' 页</span>' "$R5/build/index.html"; then
@@ -488,6 +542,19 @@ chk "⑩ 顺序＝最新在前（日期倒序、同日按名字升序、无日�
 if sed -n '/<main/,/<\/main>/p' "$R10/build/index.html" | grep -qE '[0-9]{4}-[0-9]{2}-[0-9]{2}'; then
   bad "⑩ 卡片区渲染出了日期（日期只用于排序，不该上页面）"
 else ok "⑩ 卡片区没有日期（只用于排序）"; fi
+# 「最近更新」小圆点的**反方向**：这个夹具里的 deck 要么是 2020/2026-01 的老提交、要么
+# 从未提交（取不到日期），都不该被标成「最近更新」。
+# 尤其是「取不到日期」那套：早期实现把它当成"新 deck"直接标上，于是浅克隆 / 无历史的
+# 环境里**每一行都会带圆点** —— 那比没有标记更误导人。现在改成 fail safe（取不到日期就不标）。
+chk "⑩ 旧 deck / 无日期时不得出现「最近更新」标记" \
+    "$(grep -c 'class="dot"' "$R10/build/index.html" || true)" 0
+# 这个夹具里**一张封面图都没有**（build/ 是空的、只放了空 PDF），所以导航页必须
+# **不渲染任何 `<img class="cover">`**（但仍要渲染 4 张卡片，上面那条顺序断言已经钉住）。
+# 这条钉的是 workflow 里 `if [ -f "$BUILD_DIR/covers/$name.png" ]` 那个守卫：把它改成
+# `if true` 时页面上会出现 4 个坏图（src 指向不存在的文件），而此前**没有任何断言会红**
+# （实测：改 `if true` → 99 通过 / 0 失败）。浏览器不会报错，只是每行一个破图。
+chk "⑩ 缺封面时不渲染 <img>（仍渲染卡片）" \
+    "$(grep -c 'class="cover"' "$R10/build/index.html" || true)" 0
 
 ENVCHECK=""
 for f in "$TMP"/scripts/*.sh; do grep -q 'BUILD_DIR 非法' "$f" 2>/dev/null && ENVCHECK="$f"; done
@@ -503,6 +570,19 @@ if [ -n "$ENVCHECK" ]; then
   for ok_dir in "build" "slides/build"; do
     if ( cd "$R5" && RUNNER_TEMP="$T" BUILD_DIR="$ok_dir" TYPST_VERSION="$TYPST_VERSION" bash "$ENVCHECK" ) >/dev/null 2>&1; then rc=0; else rc=$?; fi
     chk "⑦ BUILD_DIR='${ok_dir}' 必须放行" "$rc" 0
+  done
+  # RECENT_DAYS：写错时 git **不报错**、只是让 --since 落到一个无效/过去的时间点，
+  # 结果是首页一个圆点都不出现而 CI 全绿（实测 'abc' → 0 个圆点、rc=0）—— 又一个静默失效。
+  # 所以它必须被「校验构建环境变量」那步显式拦下；这里钉住拒绝与放行两面。
+  for bad_days in "" "abc" "0" "-3" "14 days" "99999"; do
+    if ( cd "$R5" && RUNNER_TEMP="$T" BUILD_DIR="$BUILD_DIR" TYPST_VERSION="$TYPST_VERSION" \
+         RELEASE_TZ="$RELEASE_TZ" RECENT_DAYS="$bad_days" bash "$ENVCHECK" ) >/dev/null 2>&1; then rc=0; else rc=$?; fi
+    chk "⑦ RECENT_DAYS='${bad_days}' 必须被拒绝" "$rc" 1
+  done
+  for ok_days in "1" "14" "3650"; do
+    if ( cd "$R5" && RUNNER_TEMP="$T" BUILD_DIR="$BUILD_DIR" TYPST_VERSION="$TYPST_VERSION" \
+         RELEASE_TZ="$RELEASE_TZ" RECENT_DAYS="$ok_days" bash "$ENVCHECK" ) >/dev/null 2>&1; then rc=0; else rc=$?; fi
+    chk "⑦ RECENT_DAYS='${ok_days}' 必须放行" "$rc" 0
   done
 fi
 
