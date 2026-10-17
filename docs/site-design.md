@@ -312,4 +312,30 @@
   另外截图时 `index.html` 必须和 `covers/`、`icon.png` 同目录（页面用相对路径），
   把 HTML 单独拷到别处截会让头像变成破图（页面用相对路径引用 `icon.png`）。
 
+  **⑤ 四处收尾打磨（2026-10-17，独立复核提出、逐项实测后落地）** —— 都是「边界或状态下的静默劣化」，
+  正常数据下看不出来，所以每条都留了实测数字：
+
+  * **长串撑破页面**：`.deck-main` 加 `overflow-wrap: anywhere`（**可继承**属性，写在容器上一次覆盖
+    `.deck-title` / `.deck-desc` / `.file`），`.deck-title` 补 `max-width: 100%`。
+    实测（`documentElement.scrollWidth` vs `clientWidth`）：78 字符无空格标题 + 74 字符副标题 +
+    63 字符文件夹名的夹具，**500px 视口**下旧 CSS 是 `sw 852 / cw 485`（整页横滚 367px），
+    新 CSS 是 `sw 500 / cw 500`；1100px 下两者都正常。触发阈值：500px 约 41 字符、1100px 约 86 字符。
+    **只给 `.deck-title` 加是不够的** —— 长副标题（长 URL 很常见）照样溢出 373px，所以属性必须放在容器上。
+  * **元信息换行留下孤零零的 `·`**：分隔点是 `.badge + .file::before` 生成的，一旦换行，
+    第二行就以那个点开头（500px 下文件夹名 ~50 字符触发）。改成 `.deck-meta { flex-wrap: nowrap }`
+    + `.deck-meta .file { min-width: 0 }`，让**文件名在内部折行**而不是整行换行。
+    取舍：极长文件名会断在词中间（比行首一个孤点好）。若哪天更想保留换行，把分隔点改挂到上一项尾部
+    （`.badge::after`）即可，同样是一行改动。
+  * **hover 时元信息对比度不足**：整行 hover 底色是 `--secondary`（浅色 #F0F0F0），元信息的 muted 灰
+    #737373 在白底上是 4.74:1（刚过 AA），压到灰底上只剩 **4.16:1**（不合格）。副标题早就补过
+    （`.deck:hover .deck-desc`），元信息是漏的 → 补 `.deck:hover .deck-meta { color: hsl(var(--foreground)) }`。
+  * **`prefers-reduced-motion` 漏了三处位移**：原来只关掉淡入与光带，头像 180° 旋转、标题上浮 2px、
+    外链图标滑 24px 都还在动。实测（`--force-prefers-reduced-motion` + `getComputedStyle`）：
+    旧值 `transform / 0.3s` → 新值 `none / 0s`；**不带该偏好时仍是 `transform / 0.3s`**（没误伤正常用户）。
+    只关位移类，颜色过渡不触发前庭反应、保留。
+
+  四处改动的级联都机械核对过：`overflow-wrap` / `flex-wrap` 各自只出现在一个选择器里；
+  `.deck:hover .deck-meta` 靠优先级 (0,3,0) > (0,1,0) 生效（源顺序在前也无妨）；
+  reduced-motion 那三条与基础规则同优先级、位置更后，因此覆盖成立。
+
 <!-- tortrixx/slides · 仓库约定见 AGENTS.md -->

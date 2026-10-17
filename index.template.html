@@ -402,6 +402,13 @@
       .deck-main {
         min-width: 0;
         flex: 1;
+        /* 长串（无空格的长标题、长 URL 副标题、长文件夹名）必须能断行：flex 子项只解决
+           「不被内容撑大」，解决不了文本自身的 min-content 宽度 —— 一个 41 字符的无空格
+           标题在 500px 视口就会把整页撑出横向滚动条（2026-10-17 实测：1100px 要 ~86 字符、
+           500px 只要 ~41 字符）。`overflow-wrap` 是**可继承**属性，写在容器上一次覆盖
+           .deck-title / .deck-desc / .file 三处；只给 .deck-title 加会漏掉副标题与文件名
+           （实测长副标题 500px 下仍溢出 373px）。 */
+        overflow-wrap: anywhere;
       }
       .deck-title {
         display: inline-flex;
@@ -416,6 +423,9 @@
         line-height: 1;
         text-underline-offset: 4px;
         transition: transform 0.3s ease;
+        /* inline-flex 的宽度上限要显式给，否则长标题按 min-content 撑开（配 .deck-main 的
+           overflow-wrap 一起用） */
+        max-width: 100%;
       }
       .deck:hover .deck-title {
         transform: translateY(-2px);
@@ -469,6 +479,12 @@
       .deck:hover .deck-desc {
         color: hsl(var(--foreground));
       }
+      /* hover 时整行底色变成 --secondary（浅色 #F0F0F0），元信息的 muted 灰在白底上是
+         4.74:1（刚过 AA），压到灰底上只有 **4.16:1**（不合格）。副标题早就补了这一手
+         （上一行），元信息是漏的 —— 现在两处一致（2026-10-17 实测重算）。 */
+      .deck:hover .deck-meta {
+        color: hsl(var(--foreground));
+      }
       /* 副信息行 = 一句话的"规格说明"：`49 页 · 748 KB · 26-09-30.pdf`。
          **别再给页数/大小加边框或胶囊**（2026-10 用户提的「别抢标题注意力」，详见
          docs/site-design.md）：整页带 1px 边框 + 圆角的元素**只有这些胶囊**（2 套 = 4 个，每套 2 个），
@@ -481,12 +497,21 @@
          是纯装饰；真嫌三项挨太近就把它提到满色（4.74:1），**不要**为此把胶囊加回来。 */
       .deck-meta {
         display: flex;
-        flex-wrap: wrap;
+        /* **不换行**（2026-10-17 改，原为 wrap）：分隔点是用 `.badge + .file::before` 生成的，
+           一旦换行，第二行就会以那个 `·` 开头 —— 孤零零一个点（实测 500px 视口下文件夹名
+           ~50 字符就触发）。整行不换行 + 让 `.file` 在**内部**折行（overflow-wrap 从
+           .deck-main 继承）就没有这个问题，也保住了「三项一行读完」的观感。 */
+        flex-wrap: nowrap;
         align-items: center;
         gap: 0;
         margin-top: 0.5rem;
         font-size: 0.75rem;
         color: hsl(var(--muted-foreground));
+      }
+      /* nowrap 的行里，flex 子项默认 `min-width: auto`（= min-content）会拒绝收缩、直接把行
+         撑破，所以要显式放开，长文件名才会在内部折行 */
+      .deck-meta .file {
+        min-width: 0;
       }
       .badge + .badge::before,
       .badge + .file::before {
@@ -584,6 +609,14 @@
         /* 关掉动画后光带会定格成一个色块，不如直接不显示 */
         .beam {
           display: none;
+        }
+        /* 这三处的 transition 也是**动效**（头像 180° 旋转、标题上浮 2px、外链图标滑 24px），
+           原来只关了淡入与光带，漏了它们（2026-10-17 复核指出）。只关 transform 类的位移；
+           颜色过渡不触发前庭反应，保留。 */
+        .avatar,
+        .deck-title,
+        .deck-title .ext {
+          transition: none;
         }
       }
     </style>

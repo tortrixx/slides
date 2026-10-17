@@ -271,8 +271,13 @@ Noto Sans CJK / Inter（2026-10-17 独立复核指出：旧文档写「钉住后
   行分隔线用 `.deck + .deck::before` 伪元素（**别改回 `border-top`**）；整行可点用 stretched-link
   （别加第二个链接）；主题三态 auto/light/dark 且
   `apply(mode === "auto" ? query.matches : mode === "dark")`；装饰 SVG 一律 `aria-hidden`；
-  动效保留 `@supports` 与 `prefers-reduced-motion`；背景设在 `html`，
+  动效保留 `@supports` 与 `prefers-reduced-motion`（该偏好下除了淡入与光带，还要关掉
+  `.avatar` / `.deck-title` / `.ext` 的 transition）；背景设在 `html`，
   **`body` 上不能再写 background**；页脚靠 flex 压底、不用 `position: fixed`。
+  长串断行靠 `.deck-main` 上的 `overflow-wrap: anywhere`（**可继承，别只加在 `.deck-title`**，
+  否则长副标题照样溢出）；`.deck-meta` 是 `flex-wrap: nowrap` + `.file { min-width: 0 }`
+  （一换行，分隔点就会孤零零落在第二行行首）；hover 时元信息也要提到 `--foreground`
+  （`--secondary` 灰底上 muted 只有 4.16:1，不合格）。依据与实测见 docs/site-design.md ⑤。
 - **产物**：`slides-build`（给 release job，`retention-days: 3`）+ `github-pages`（给 deploy job）。
   两份都只在本运行内使用，保留期刻意压短。
 
