@@ -236,8 +236,9 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
   为 restore-keys 缓存 `build/`。逐套判断：全量 / 缓存缺 PDF / 该目录相对**基准提交**有改动 → 重编。
   最后清理「`slides/<名称>/main.typ` 已不存在」的残留 PDF **和对应的封面图**（`build/covers/<名称>.png`）。
   **封面缩略图**（2026-10-17 加，细则见 docs/site-design.md）跟着增量走，别让它变成"每次全量"：
-  只对**这次真编过**的 deck 跑 `typst compile --format png --ppi 32 --pages 1`（16:9 出 374×210、
-  约 3–6 KB）；复用的那套**缺图时只补图、不重编 PDF**（老缓存 / 缓存被清理 / 本功能刚上线的自愈，
+  只对**这次真编过**的 deck 跑 `typst compile --format png --ppi 96 --pages 1`（16:9 出 1123×631、
+  约 10–24 KB —— 首页封面按卡片宽度显示，ppi 太低放大就糊）；复用的那套**缺图时只补图、不重编 PDF**
+  （老缓存 / 缓存被清理 / 本功能刚上线的自愈，
   门禁 ②c 钉着）；生成失败就 `exit 1`（缺图时页面不报错、只是少一张图，属于最难发现的坏法）。
   `covers/` 与 PDF 同住 `build/`，**不用改 cache 的 path/key**，但导航页那步的旧文件清理白名单
   要加上目录名 `covers`（见「站点静态资源」那条）。
@@ -375,13 +376,15 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
     标题收到 1.25rem，**不再纵向堆叠**。改之前窄屏 `.head-row` 高 176.4px（`.spacer{flex:1}`
     在 column 方向也参与分配），第一张卡片被压到 y=220；现在同条件 62px、卡片从 y=98 开始。
     `.avatar` 的 CSS 分两档（48/64），`<img>` 上的 `width/height="64"` 是无 CSS 时的兜底；
-  - 行首是 **`.cover` 封面缩略图**（96×54，窄屏 72px；`object-fit: contain` + `align-self: center`，
-    理由见 docs/site-design.md），`height: auto` 必须写 —— 否则 `<img height="54">` 属性会在窄屏把图压扁；
+  - 版式是**卡片网格**（2026-10-17 由「小封面 + 纯列表」改来，见 docs/site-design.md）：
+    `.decks` 是 `grid`（`auto-fill` + `20rem` 下限 → ≥640px 自然两列、窄屏一列），
+    卡片里 `.cover` 铺满卡片宽度（≈300–490px，`object-fit: contain` 兼容 A4 竖版）；
+    `height: auto` 必须写 —— 否则 `<img width="560" height="315">` 这对兜底属性会把图定死；
   - 标题后的 **`.dot`** 是「最近更新」小圆点（纯装饰 + 紧随其后的 `.sr-only` 文本承担语义）；
   - 字重写 `500`（意图 medium），**别写 600**（本字体栈里 600 就是 bold）；层级靠字号 + 颜色承担；
-  - 行分隔线是 `.deck + .deck::before` 伪元素画的**两端渐隐**细线（页眉线是 2px 通栏实线，
-    两条线"重量"必须不同）—— **别改回 `border-top`**（圆角会拐弯、渐变画不进 border）；
-  - 整行可点用 stretched-link（`.deck-title::after` 伪元素铺满整行），不要再往行里加第二个
+  - **没有行分隔线了**：改成卡片网格后，条目之间靠 `gap`（`1.75rem 1.5rem`）分开；
+    页眉下面那条 2px 通栏实线（`.head-row` 的 border-bottom）仍是**区块边界**，别再往卡片上加线/色条；
+  - 整张卡片可点用 stretched-link（`.deck-title::after` 伪元素铺满卡片），不要再往卡片里加第二个
     链接/按钮；日期只用于构建时排序、**不渲染**到页面；
   - 主题是三态循环 auto/light/dark，应用时必须判断模式
     （`apply(mode === "auto" ? query.matches : mode === "dark")`，照抄 `apply(query.matches)`
@@ -632,7 +635,7 @@ bash verify-site.sh --build    # 再加 ①~⑪ 的编译路径（共 109 项）
   聚合出的 `preview-deps.typ`；verify job 里门禁通过显式设置 `TYPST_PACKAGE_CACHE_PATH`
   复用同一份缓存）。
 - ~~首页封面缩略图~~（2026-10-17 已做：编译步产出 `build/covers/<名称>.png`，卡片行首显示
-  96×54 的小图，见 §4「增量编译」）。还想要的**每套 deck 自定义描述**仍未做：现在的描述行
+  铺满卡片宽度的封面，见 §4「增量编译」与 docs/site-design.md）。还想要的**每套 deck 自定义描述**仍未做：现在的描述行
   直接取 `subtitle`，想让它和封面页的副标题分开，得在 workflow 里另加一个字段（A4 文档
   用不了 `subtitle:`，见 §3.9）。
 - **首页的规模化改造**（2026-10-17 明确暂缓，等 deck 数涨上来再说，触发条件 ≈15 套）：

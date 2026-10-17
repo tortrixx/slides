@@ -414,15 +414,17 @@ jobs:
             fi
 
             # ---------- 封面缩略图（首页卡片用） ----------
-            # 只编第一页、--ppi 32（16:9 出来是 374×210、约 3–6 KB；实测 26-09-30 3989 B、
-            # template 5783 B）。排版成本与一次 PDF 编译同量级，所以只为「这次真编过的」
-            # deck 生成。
+            # 只编第一页、--ppi 96（16:9 出来是 1123×631、约 10–16 KB；实测 26-09-30 15973 B）。
+            # 为什么这么高：首页是**卡片网格**，封面按卡片宽度显示（≈300–490px），
+            # 96ppi 的 374px 图放大到 490px 就糊了；ppi 96 给到 ≈2.3× 的像素密度。
+            # 体积代价可忽略（每套十几 KB），排版成本与一次 PDF 编译同量级，
+            # 所以只为「这次真编过的」deck 生成。
             # **fail closed**：图生成失败就整步失败。缺封面时页面不会报错、只是图没了
             # （导航页那边文件不存在就不输出 <img>），属于最难发现的坏法。
             # 若哪天 typst 要求输出模式里带 {p}，就改成 "$name-{p}.png" 并同步导航页的引用
             # （门禁 ① 钉着「每套 deck 一张封面、首页引用数一致」）。
             if [ "$need_cover" -eq 1 ]; then
-              if (cd "$dir" && typst compile --format png --ppi 32 --pages 1 main.typ "$build_dir/covers/$name.png"); then
+              if (cd "$dir" && typst compile --format png --ppi 96 --pages 1 main.typ "$build_dir/covers/$name.png"); then
                 echo "🖼️  $name → $BUILD_DIR/covers/$name.png"
               else
                 echo "::error::幻灯片 $name 的封面图生成失败（typst --format png --pages 1）"
@@ -610,10 +612,12 @@ jobs:
             # 封面缩略图（编译步产出 build/covers/<名称>.png）。文件不在时**整个 <img> 都不输出**，
             # 与「读不到 /Count 就不渲染页数」同一个风格：宁可少一张图，也不要一个坏图。
             # alt 留空：标题就在紧隔壁，这张图是纯装饰（读屏软件不必念它）。
-            # width/height 属性写 CSS 像素尺寸（96×54，与窄屏断点无关）：图没加载时行高不跳动。
+            # width/height 属性只是「16:9 比例提示 + 样式表没生效时的兜底尺寸」：真实显示尺寸由
+            # CSS 决定（`width: 100%`，随卡片伸缩），所以这里写一个适中的 560×315，
+            # 而不是图片自身的 1123×631 —— 后者在无 CSS 时会撑破视口。
             cover_html=""
             if [ -f "$BUILD_DIR/covers/$name.png" ]; then
-              cover_html="<img class=\"cover\" src=\"covers/${name_html}.png\" alt=\"\" width=\"96\" height=\"54\" loading=\"lazy\" decoding=\"async\" />"
+              cover_html="<img class=\"cover\" src=\"covers/${name_html}.png\" alt=\"\" width=\"560\" height=\"315\" loading=\"lazy\" decoding=\"async\" />"
             fi
 
             # 卡片结构对应 index.template.html 里的 .deck 样式

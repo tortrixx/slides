@@ -12,10 +12,10 @@
       COUNT 现在**模板里没有用到**（标题旁的套数已去掉），workflow 的替换规则留着 ——
       想恢复显示就把它写回 h1 里，不用碰 YAML。
       其中 SLIDES 是服务端渲染出来的幻灯片卡片，所以不依赖 JS；JS 只负责深浅色。
-      卡片结构（由 workflow 的 heredoc 生成）：`.deck > img.cover（构建时产出的封面缩略图）
-      + .deck-main（.deck-title > 标题 / .dot / .ext，可选 .deck-desc，.deck-meta）`。
-      封面缩略图不在模板里、也不在仓库里：编译步跑 `typst compile --format png --ppi 32
-      --pages 1` 产出 build/covers/<名称>.png，导航页只负责引用。
+      卡片结构（由 workflow 的 heredoc 生成）：`.decks`（网格容器）> `.deck > img.cover
+      （构建时产出的封面）+ .deck-main（.deck-title > 标题 / .dot / .ext，可选 .deck-desc，
+      .deck-meta）`。封面不在模板里、也不在仓库里：编译步跑 `typst compile --format png
+      --ppi 96 --pages 1` 产出 build/covers/<名称>.png，导航页只负责引用。
       主题是三态循环，右上角按钮依次切 auto → 浅色 → 深色 → auto：
         * auto（默认）：每次加载都重新读浏览器的 prefers-color-scheme，系统切换时实时跟随；
         * 浅色 / 深色：用户明确选过才写进 localStorage 固定下来（auto 会清掉那个键）。
@@ -103,7 +103,9 @@
         position: relative;
         margin: 0 auto;
         width: 90%;
-        max-width: 48rem;
+        /* 48rem → 64rem（2026-10-17）：列表改成两列卡片后，卡片宽度 ≈488px，
+           封面按这个宽度显示时幻灯片标题才真的看得清（见 .decks / .cover） */
+        max-width: 64rem;
         padding: 1.25rem 0 2.5rem;
         /* 这里**不要**再设 background：根元素已经有背景、已经铺满视口，
            而 .bg-grid 是 z-index:-1 —— 它画在根背景之上、但在 body 背景之下，
@@ -330,89 +332,63 @@
          **但别指望 `text-decoration: none` 能挡掉祖先的下划线**：父级是 flex 容器时这个
          span 会被 blockify，下划线照样画进来（踩坑记录见 docs/site-design.md）。 */
 
-      /* ---------- 幻灯片列表 ---------- */
-      /* 版式是「小封面 + 纯列表」：一行一套，行首一张 96×54 的封面缩略图，右侧标题/副标题/
-         元信息，行间一条细线。四件**别改**的事：
-           * 行内不要再加色条（原站那根红条是**分组标题**的标记，按行复制就成了满屏粉条）；
-           * hover 必须是**整行**（`.deck` 是 `width: 100%`）—— 有了行线之后，贴合式灰块的
-             右边缘和行线对不齐就是"脏"；
+      /* ---------- 幻灯片列表：卡片网格（2026-10-17 改） ---------- */
+      /* 版式从「小封面 + 纯列表」改成**卡片网格**：一行/两列，每张卡片上方是**铺满卡片宽度**的
+         封面（≈300–490px，取决于视口），下面是标题/副标题/元信息。
+         为什么改：原来行首只有 96×54 的缩略图，用户 2026-10-17 看线上效果的原话是
+         「预览卡片太小了，基本上啥也看不到」—— 96px 宽的幻灯片封面里，20pt 的标题只有约 3px 高，
+         那张图实际只起"有没有图"的作用，没起到预览作用。放大到卡片宽度后（≈480px），
+         幻灯片标题约 13px、正文约 9px，扫一眼就能认出是哪套。
+         三件**别改**的事：
            * 顺序「最新在前」由 workflow 按 git 提交日期在构建时排好，**日期不上页面**
-             （它说的是"这套 deck 上次提交"，不是内容日期；要透出"新旧"只用 `.dot` 小圆点，
-             别恢复整列日期）；
-           * 封面缩略图由**编译步**产出（`typst compile --format png --ppi 32 --pages 1` →
-             `build/covers/<名称>.png`，374×210、约 3–6 KB），导航页只负责引用，模板里没有它。
-             删掉那张图不会报错，只会让每行少一张图 —— 门禁 ① 钉着「每套一张 + 引用数一致」。
-         完整的历史与外部依据见 docs/site-design.md。 */
+             （它说的是"这套 deck 上次提交"，不是内容日期；要透出"新旧"只用 `.dot` 小圆点）；
+           * 卡片内**只有一个链接**（标题的 stretched-link 铺满整张卡片），别再加按钮；
+           * 封面图由**编译步**产出（`typst compile --format png --ppi 96 --pages 1` →
+             `build/covers/<名称>.png`，1123×631、约 10–16 KB），模板里没有它 —— 删掉那张图
+             不会报错，只会少一张图，门禁 ① 钉着「每套一张 + 引用数一致」。
+         完整历史与外部依据见 docs/site-design.md。 */
+      .decks {
+        display: grid;
+        /* auto-fill + 20rem 下限：≥640px 视口自然排两列，窄屏落回一列；
+           `min(100%, 20rem)` 是为了极窄屏（<20rem）也不溢出 */
+        grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr));
+        gap: 1.75rem 1.5rem;
+      }
       .deck {
         position: relative;
         display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
         width: 100%;
-        /* 行距比正文节奏再松一档：Primer 的 action list 明确写了「用条目分隔线时，同时把行高
-           放大一点有助于可读性」——线越清楚、行越挤，就越像表格，这是刻意防它变表格。 */
-        /* 上下内边距做成**近似相等**（15px / 14px）：行线是 `.deck + .deck::before` 画的
-           1px 线，落在上一行的 padding-bottom 与下一行的 padding-top 之间，两者不等就会
-           "线偏上"。实测（第二行带副标题、最高的一行）：线到上一行墨迹 14px、到下一行墨迹
-           18px；旧值 0.68rem / 0.6rem = 10.9px / 9.6px 时偏差更大，线明显偏上。
-           注意这两个数从 `getBoundingClientRect()` 量出来是行盒，观感差的是**墨迹**到线，
-           两者差 3–4px（12–18px 的字，行高里有 half-leading），别只按行盒调。 */
-        padding: 0.9375rem 0.5rem 0.875rem;
+        padding: 0.5rem;
+        /* 边框平时透明、hover 才显形：参考站（tortrixx.pages.dev/workspace）的卡片就是
+           `border border-transparent hover:border-secondary hover:bg-…` 这一套。
+           封面自己有 1px 边框（白纸贴在白底上需要边界），卡片本身不用常显边框。 */
+        border: 1px solid transparent;
         border-radius: var(--radius);
-        transition: background-color 0.3s ease;
+        transition: background-color 0.3s ease, border-color 0.3s ease;
       }
-      /* 行首封面缩略图。三处刻意的选择：
+      .deck:hover {
+        background: hsl(var(--secondary));
+        border-color: hsl(var(--border));
+      }
+      /* 封面：铺满卡片宽度。两处刻意的选择：
          * `object-fit: contain` 而不是 `cover`：仓库允许 A4 / 非 16:9 文档（AGENTS.md §3.9），
-           `cover` 会把竖版页面裁成一条横带；`contain` 对 16:9 完全等价，对竖版是留边不裁切，
+           `cover` 会把竖版页面裁成一条横带；`contain` 对 16:9 完全等价，对竖版留边不裁切，
            留边处露出 `--secondary` 底色。
-         * `align-self: center`：`.deck` 没写 align-items，默认 `stretch` 会把图盒拉到整行高
-           （图本身仍因 contain 不变形，但会多出一圈底色，看着像个大灰块）。
-         * 宽度窄屏 72px / ≥640px 96px；`height: auto` + `aspect-ratio` 是必须的 —— 不然
-           `<img>` 上的 `height="54"` 属性（无 CSS 时的兜底）会在窄屏把图压扁。 */
+         * `height: auto` + `aspect-ratio` 是必须的 —— `<img>` 上还有 `width`/`height` 属性
+           （无 CSS 时的兜底），不写 `height: auto` 就会被那对属性定死尺寸、不随卡片伸缩。 */
       .cover {
-        flex: none;
-        align-self: center;
-        width: 96px;
+        width: 100%;
         height: auto;
         aspect-ratio: 16 / 9;
         object-fit: contain;
         background: hsl(var(--secondary));
         border: 1px solid hsl(var(--border));
         border-radius: 6px;
-        margin-right: 1rem;
-      }
-      @media (max-width: 639px) {
-        .cover {
-          width: 72px;
-          margin-right: 0.75rem;
-        }
-      }
-      /* 行与行之间一条**两端渐隐**的细线（2026-10 定稿）。
-         只能用伪元素 + `background-image`：`.deck` 是圆角盒子，`border-top` 会在两端跟着圆角
-         拐弯，而且**渐变画不进 border** —— **别改回 `border-top`**。
-         为什么是渐隐（而不是"两端各内缩 0.5rem + 半透明"）：页眉下面那条（`.head-row` 的
-         border-bottom）是**区块边界**（通栏实线、两端到头），行线只要也是"硬端点"就还在跟它
-         比长短、层级发黏；渐隐之后行线是"一段化开的毛发线"，靠**质感**分层而不是长度。
-         Material 3 / iOS `separatorInset` / Primer / 参考站这几条依据见 docs/site-design.md。 */
-      .deck + .deck::before {
-        content: "";
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        height: 1px;
-        background-image: linear-gradient(
-          to right,
-          transparent,
-          hsl(var(--border)) 12%,
-          hsl(var(--border)) 88%,
-          transparent
-        );
-      }
-      .deck:hover {
-        background: hsl(var(--secondary));
       }
       .deck-main {
         min-width: 0;
-        flex: 1;
       }
       .deck-title {
         display: inline-flex;
@@ -422,7 +398,9 @@
            （见下面 .deck-meta，用户提的就是这个）。现在 18px + 500（意图 medium，理由同
            .page-title 那条），层级由**字号 + 颜色**承担（18px 纯黑 / 14px 灰 / 12px 灰），
            hover 再补下划线。 */
-        font-size: 1.125rem;
+        /* 卡片版式下标题放到 20px（原来列表版是 18px）：封面占了卡片上半部分，
+           标题要压得住下半部分；层级仍是「字号 + 颜色」（20px 纯黑 / 14px 灰 / 12px 灰） */
+        font-size: 1.25rem;
         font-weight: 500;
         line-height: 1;
         text-underline-offset: 4px;
@@ -786,7 +764,7 @@
     <main>
       <!-- ================= 幻灯片 ================= -->
       <!-- 这一节没有自己的标题：页面标题（h1 Slides）已经在顶栏里，这里再写一遍就是重复 -->
-      <section class="fade" style="--i: 1">
+      <section class="decks fade" style="--i: 1">
         <!--SLIDES-->
       </section>
     </main>
