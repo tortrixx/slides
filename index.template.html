@@ -11,10 +11,14 @@
       产物里那句成了「注意 2 现在模板里没有用了」。所以下面只写名字、不写原文。
       COUNT 现在**模板里没有用到**（标题旁的套数已去掉），workflow 的替换规则留着 ——
       想恢复显示就把它写回 h1 里，不用碰 YAML。
-      其中 SLIDES 是服务端渲染出来的幻灯片卡片，所以不依赖 JS；JS 只负责深浅色。
-      卡片结构（由 workflow 的 heredoc 生成）：`.deck > .deck-main（.deck-title > 标题 / .dot /
+      其中 SLIDES 是服务端渲染出来的卡片列表（幻灯片与成品幻灯片同列混排，不分
+      区块），所以不依赖 JS；JS 只负责深浅色与列表筛选。
+      卡片结构（由 workflow 的 heredoc 生成）：`.deck > .deck-main（.deck-title > 标题 /
       .ext，可选 .deck-desc，.deck-meta）` —— 纯文字列表，没有封面图（2026-10-17 试过两种带
       封面的版式，当天都撤了，理由见 docs/site-design.md）。
+      列表上方的筛选框是纯增强：JS 读卡片的 textContent 做子串匹配、把不匹配的卡片
+      藏起来；无 JS 时筛选框根本不渲染（靠 head 脚本给 html 加的 js 标记控制），
+      列表完整可见。
       主题是三态循环，右上角按钮依次切 auto → 浅色 → 深色 → auto：
         * auto（默认）：每次加载都重新读浏览器的 prefers-color-scheme，系统切换时实时跟随；
         * 浅色 / 深色：用户明确选过才写进 localStorage 固定下来（auto 会清掉那个键）。
@@ -34,14 +38,14 @@
     <title>Slides · tortrixx</title>
     <meta
       name="description"
-      content="tortrixx 的幻灯片集合：用 Typst + Touying 编写，推送后自动编译为 PDF。"
+      content="tortrixx 的幻灯片集合：Typst 编写的放映稿推送后自动编译为 PDF，其它工具做好的成品幻灯片（PDF / PPT）也在这里。"
     />
     <!-- 分享到聊天/社交平台时显示的文字卡片（没有配图，所以用 summary 而不是大图卡片） -->
     <meta property="og:type" content="website" />
     <meta property="og:title" content="Slides · tortrixx" />
     <meta
       property="og:description"
-      content="tortrixx 的幻灯片集合：用 Typst + Touying 编写，推送后自动编译为 PDF。"
+      content="tortrixx 的幻灯片集合：Typst 编写的放映稿推送后自动编译为 PDF，其它工具做好的成品幻灯片（PDF / PPT）也在这里。"
     />
     <meta name="twitter:card" content="summary" />
     <!-- 地址栏/滚动条等浏览器自带界面跟随系统偏好；用户手动切过之后则由下方的 JS 改写 -->
@@ -49,30 +53,46 @@
     <!-- 这两条按系统偏好给浏览器 UI 上色（无 JS 时的兜底）；
          有 JS 时上方脚本会摘掉 media 并改写 content，让它跟"实际生效的主题"一致，
          否则手动固定浅/深之后地址栏颜色会和页面对不上 -->
-    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#FFF" />
-    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#09090B" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#FBFAF8" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0F1114" />
     <link
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%2318181b'/%3E%3Crect x='3' y='3.6' width='10' height='1.6' rx='.8' fill='%23fafafa'/%3E%3Crect x='3' y='7.2' width='10' height='1.6' rx='.8' fill='%23fafafa'/%3E%3Crect x='3' y='10.8' width='6' height='1.6' rx='.8' fill='%23fafafa'/%3E%3C/svg%3E"
     />
     <style>
-      /* ---------- 设计变量（与 shadcn 的 neutral 主题一致） ---------- */
+      /* ---------- 设计变量 ---------- */
+      /* 2026-11 视觉改版（用户点名对标 Craft 的美学：克制、留白、柔和表面与分层阴影，
+         不是照抄某个产品）：画布是带一点暖意的纸色，内容浮在纯白卡片上，层级靠
+         表面明度 + 发丝边框 + 柔和投影承担，而不是靠线条和颜色的强度。
+         深色同理：画布更深、卡片高一档明度，顶部有一道内嵌高光。 */
       :root {
-        --background: 0 0% 100%;
-        --foreground: 0 0% 3.9%;
-        --secondary: 0 0% 94%;
-        --muted-foreground: 0 0% 45.1%;
+        --background: 40 14% 98%;
+        --foreground: 240 5% 11%;
+        --secondary: 0 0% 94.5%;
+        --muted-foreground: 240 3% 43%;
         --border: 0 0% 89.8%;
+        --card: 0 0% 100%;
         --radius: 0.5rem;
+        --accent: #0071e3;
         --accent-blue: #60a5fa;
         --accent-yellow: #facc15;
+        --shadow-card: 0 1px 2px rgb(16 24 40 / 0.05), 0 10px 30px -12px rgb(16 24 40 / 0.1);
+        --shadow-card-hover: 0 2px 4px rgb(16 24 40 / 0.06), 0 18px 44px -12px rgb(16 24 40 / 0.18);
+        --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Inter,
+          "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+        --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Roboto Mono",
+          "Noto Sans Mono CJK SC", "Noto Sans Mono", monospace;
       }
       .dark {
-        --background: 0 0% 3.9%;
-        --foreground: 0 0% 98%;
-        --secondary: 0 0% 14.9%;
-        --muted-foreground: 0 0% 63.9%;
+        --background: 225 11% 7%;
+        --foreground: 0 0% 96%;
+        --secondary: 0 0% 16%;
+        --muted-foreground: 0 0% 65%;
         --border: 0 0% 25.1%;
+        --card: 224 10% 11%;
+        --accent: #0a84ff;
+        --shadow-card: inset 0 1px 0 rgb(255 255 255 / 0.04), 0 10px 30px -12px rgb(0 0 0 / 0.55);
+        --shadow-card-hover: inset 0 1px 0 rgb(255 255 255 / 0.06), 0 18px 44px -12px rgb(0 0 0 / 0.65);
       }
 
       *,
@@ -105,8 +125,8 @@
         flex-direction: column;
         position: relative;
         margin: 0 auto;
-        width: 90%;
-        max-width: 48rem;
+        width: 92%;
+        max-width: 46rem;
         padding: 1.25rem 0 2.5rem;
         /* 这里**不要**再设 background：根元素已经有背景、已经铺满视口，
            而 .bg-grid 是 z-index:-1 —— 它画在根背景之上、但在 body 背景之下，
@@ -115,8 +135,9 @@
            .bg-grid 那层 position:fixed + height:100% 的百分比才有参照。 */
         min-height: 100vh;
         color: hsl(var(--foreground));
-        font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
-          "Roboto Mono", "Noto Sans Mono CJK SC", "Noto Sans Mono", monospace;
+        /* 正文/标题用无衬线（Craft 式的干净层级）；等宽只保留给元信息与文件名
+           （数据感的那一行），站点的技术气质靠它留住。 */
+        font-family: var(--font-sans);
         font-size: 16px;
         line-height: 1.6;
         -webkit-font-smoothing: antialiased;
@@ -125,6 +146,9 @@
         body {
           padding-top: 2.5rem;
         }
+      }
+      ::selection {
+        background: color-mix(in srgb, var(--accent) 22%, transparent);
       }
 
       a {
@@ -144,7 +168,12 @@
         mask-image: radial-gradient(circle at center, rgba(0, 0, 0, 0.6), transparent);
       }
       .bg-grid path {
-        stroke: rgb(156 163 175 / 0.3);
+        /* 网格是站点的底纹，改版后只留一点点：浅色下若隐若现，深色下更弱，
+           别和卡片抢注意力 */
+        stroke: rgb(100 100 110 / 0.13);
+      }
+      html.dark .bg-grid path {
+        stroke: rgb(255 255 255 / 0.05);
       }
 
       /* ---------- 淡入（对应 magicui 的 BlurFade） ---------- */
@@ -192,14 +221,10 @@
         flex-direction: row;
         align-items: center;
         gap: 0.5rem;
-        padding-bottom: 1rem;
-        /* **2px，行线是 1px** —— 两条线必须"重量"不同，这是区块边界与条目分隔的分层手段。
-           原来两条都是 1px + 同色，只有"两端渐隐"这点差别（肉眼看不出来），所以页眉线看着
-           跟行线同一级（用户 2026-10 提的「显示效果也差不多」）。
-           配合 `header` 的 margin-bottom 后实测（≥640px、64px 头像）：线在头像之下 18px、
-           到第一行墨迹 42px（页眉区最高的元素是头像，不是 1.5rem 的标题——按标题的行盒算
-           会得出 30.8px，那 12px 是 h1 行高里上下各约 7px 的 half-leading，不是观感距离）。 */
-        border-bottom: 2px solid hsl(var(--border));
+        padding-bottom: 1.25rem;
+        /* 改版前这里是 2px 实线（靠"重量"与行线分层）；卡片化之后层级由卡片表面
+           承担，页眉只需要一条发丝线收口，1px + 前景色低透明即可 */
+        border-bottom: 1px solid hsl(var(--foreground) / 0.1);
       }
       @media (min-width: 640px) {
         .head-row {
@@ -231,7 +256,8 @@
         align-items: center;
         gap: 0.5rem;
         margin: 0;
-        font-size: 1.25rem;
+        font-size: 1.375rem;
+        letter-spacing: -0.02em;
         /* 字重 **500 = 意图 medium**：这套字体栈只有 regular + bold 两档（实测 400 与 500
            渲染完全一致、600 与 700 都是 bold），medium 在这套字体里根本不存在。写 500 在本机
            落 regular，将来若自持 Roboto Mono Variable 就自然变成真 medium。
@@ -246,8 +272,8 @@
       }
       @media (min-width: 640px) {
         .page-title {
-          margin-left: 1.5rem;
-          font-size: 1.5rem;
+          margin-left: 1.25rem;
+          font-size: 1.625rem;
         }
       }
       .spacer {
@@ -258,23 +284,25 @@
         align-items: center;
       }
       .icon-btn {
-        margin-right: 0.25rem;
-        padding: 5px;
-        border: 0;
-        border-radius: 0.375rem;
-        background: transparent;
+        margin-right: 0.375rem;
+        padding: 7px;
+        border: 1px solid hsl(var(--foreground) / 0.08);
+        border-radius: 9999px;
+        background: hsl(var(--card));
+        box-shadow: 0 1px 2px rgb(16 24 40 / 0.05);
         color: hsl(var(--muted-foreground));
         cursor: pointer;
-        transition: background-color 0.2s, color 0.2s;
+        transition: background-color 0.2s, color 0.2s, border-color 0.2s;
       }
       .icon-btn:hover {
         background: hsl(var(--secondary));
+        border-color: hsl(var(--foreground) / 0.14);
         color: hsl(var(--foreground));
       }
       .icon-btn svg {
         display: block;
-        height: 22px;
-        width: 22px;
+        height: 20px;
+        width: 20px;
       }
       /* 三种模式各配一个图标，只显示当前那个：
          太阳 = 浅色、半明半暗的圆 = 自动跟随系统、月亮 = 深色。
@@ -307,32 +335,97 @@
       .gh {
         display: flex;
         align-items: center;
-        padding: 5px;
-        border-radius: 0.375rem;
+        padding: 7px;
+        border: 1px solid hsl(var(--foreground) / 0.08);
+        border-radius: 9999px;
+        background: hsl(var(--card));
+        box-shadow: 0 1px 2px rgb(16 24 40 / 0.05);
         color: hsl(var(--muted-foreground));
-        transition: background-color 0.2s, color 0.2s;
+        transition: background-color 0.2s, color 0.2s, border-color 0.2s;
       }
       .gh:hover {
         background: hsl(var(--secondary));
+        border-color: hsl(var(--foreground) / 0.14);
         color: hsl(var(--foreground));
       }
+      .gh svg {
+        display: block;
+        height: 20px;
+        width: 20px;
+      }
 
-      /* ---------- 区块 ---------- */
+      /* ---------- 内容区 ---------- */
       main {
         /* 1 0 auto：内容少时把剩余高度全部吃掉，页脚因此贴到页面底部；
            内容多时按内容自然增长，页脚仍旧跟在卡片之后（不会盖住内容） */
         flex: 1 0 auto;
         display: flex;
         flex-direction: column;
-        gap: 1.25rem;
+        gap: 0.75rem;
       }
-      /* 这一页只有一个区块：主标题（h1 `Slides`）在顶栏，这里**不再有区块标题 `h2`**。
-         以后若真按年/主题分组，再给每组加一条 h2（字号 1.125rem 一档，比主标题小）。
-         标题旁那个套数胶囊（`.count`）2026-10 跟着套数一起去掉了；要恢复就照当年写回来：
-         `display: inline-block; padding: 0 0.5rem; border: 1px solid hsl(var(--border));
-         border-radius: 9999px; color: hsl(var(--muted-foreground)); font-size: 0.75rem;`
-         **但别指望 `text-decoration: none` 能挡掉祖先的下划线**：父级是 flex 容器时这个
-         span 会被 blockify，下划线照样画进来（踩坑记录见 docs/site-design.md）。 */
+      /* 筛选时被藏起来的卡片：`.deck` 是 display:flex，浏览器的 [hidden] 默认样式
+         （display:none）会被它的 display 声明压过，所以显式钉一条。 */
+      .deck[hidden] {
+        display: none;
+      }
+
+      /* ---------- 筛选工具栏 ---------- */
+      /* 纯功能层：吸顶 + 毛玻璃（背景在 html 上，工具栏用半透明同色 + blur 透出网格）。
+         无 JS 时整条不渲染 —— 入口在 head 的脚本给 html 加的 js 标记；筛选逻辑本身
+         见 body 末尾的脚本，逻辑挂掉时列表也完整可见（渐进增强）。 */
+      .toolbar {
+        display: none;
+      }
+      html.js .toolbar {
+        position: sticky;
+        top: 0;
+        z-index: 5;
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 0.75rem 0;
+        background: hsl(var(--background) / 0.82);
+        -webkit-backdrop-filter: blur(10px) saturate(1.4);
+        backdrop-filter: blur(10px) saturate(1.4);
+      }
+      .toolbar input {
+        flex: 1;
+        min-width: 0;
+        max-width: 22rem;
+        padding: 0.55rem 0.875rem;
+        border: 1px solid hsl(var(--foreground) / 0.1);
+        border-radius: 0.75rem;
+        background: hsl(var(--card));
+        box-shadow: 0 1px 2px rgb(16 24 40 / 0.05);
+        color: hsl(var(--foreground));
+        font: inherit;
+        font-size: 0.875rem;
+        transition: border-color 0.2s, box-shadow 0.2s;
+      }
+      .toolbar input::placeholder {
+        color: hsl(var(--muted-foreground));
+      }
+      .toolbar input:focus {
+        outline: none;
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3.5px color-mix(in srgb, var(--accent) 18%, transparent);
+      }
+      .toolbar-count {
+        font-family: var(--font-mono);
+        font-size: 0.75rem;
+        color: hsl(var(--muted-foreground));
+        white-space: nowrap;
+      }
+      .no-results {
+        margin: 0;
+        padding: 2.5rem 1rem;
+        text-align: center;
+        font-size: 0.875rem;
+        color: hsl(var(--muted-foreground));
+      }
+      .no-results[hidden] {
+        display: none;
+      }
 
       /* ---------- 幻灯片列表 ---------- */
       /* 版式是**纯列表**：一行一套，行内标题/副标题/元信息，行间一条两端渐隐的细线。
@@ -356,48 +449,33 @@
            * hover 必须是**整行**（`.deck` 是 `width: 100%`）—— 有了行线之后，贴合式灰块的
              右边缘和行线对不齐就是"脏"；
            * 顺序「最新在前」由 workflow 按 git 提交日期在构建时排好，**日期不上页面**
-             （它说的是"这套 deck 上次提交"，不是内容日期；要透出"新旧"只用 `.dot` 小圆点，
-             别恢复整列日期）。 */
+             （它说的是"这套 deck 上次提交"，不是内容日期；新旧只靠顺序表达 —— 2026-11
+             之前还用过 `.dot` 小圆点标「最近更新」，已移除，别再加回来）。
+         **2026-11 视觉改版注记**：上面关于「行线」的段落（渐隐细线、别改回 border-top、
+         hover 整行底色）记录的是改版前的行列表设计，已被下面的**卡片式**取代（用户点名
+         对标 Craft 美学）：每条是一张浮在画布上的软卡片（表面色 + 发丝边框 + 分层阴影，
+         hover 时轻微上浮），不再有行间分隔线。仍然成立的是：不加封面、不加行内色条、
+         整卡可点（stretched-link）、日期不上页面，以及上面那条**字面量警告** ——
+         它与版式无关，继续有效。 */
       .deck {
         position: relative;
         display: flex;
         width: 100%;
-        /* 行距比正文节奏再松一档：Primer 的 action list 明确写了「用条目分隔线时，同时把行高
-           放大一点有助于可读性」——线越清楚、行越挤，就越像表格，这是刻意防它变表格。 */
-        /* 上下内边距做成**近似相等**（15px / 14px）：行线是 `.deck + .deck::before` 画的
-           1px 线，落在上一行的 padding-bottom 与下一行的 padding-top 之间，两者不等就会
-           "线偏上"。实测（第二行带副标题、最高的一行）：线到上一行墨迹 14px、到下一行墨迹
-           18px；旧值 0.68rem / 0.6rem = 10.9px / 9.6px 时偏差更大，线明显偏上。
-           注意这两个数从 `getBoundingClientRect()` 量出来是行盒，观感差的是**墨迹**到线，
-           两者差 3–4px（12–18px 的字，行高里有 half-leading），别只按行盒调。 */
-        padding: 0.9375rem 0.5rem 0.875rem;
-        border-radius: var(--radius);
-        transition: background-color 0.3s ease;
-      }
-      /* 行与行之间一条**两端渐隐**的细线（2026-10 定稿）。
-         只能用伪元素 + `background-image`：`.deck` 是圆角盒子，`border-top` 会在两端跟着圆角
-         拐弯，而且**渐变画不进 border** —— **别改回 `border-top`**。
-         为什么是渐隐（而不是"两端各内缩 0.5rem + 半透明"）：页眉下面那条（`.head-row` 的
-         border-bottom）是**区块边界**（通栏实线、两端到头），行线只要也是"硬端点"就还在跟它
-         比长短、层级发黏；渐隐之后行线是"一段化开的毛发线"，靠**质感**分层而不是长度。
-         Material 3 / iOS `separatorInset` / Primer / 参考站这几条依据见 docs/site-design.md。 */
-      .deck + .deck::before {
-        content: "";
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        height: 1px;
-        background-image: linear-gradient(
-          to right,
-          transparent,
-          hsl(var(--border)) 12%,
-          hsl(var(--border)) 88%,
-          transparent
-        );
+        /* 卡片式（2026-11 改版）：表面色比画布高一档（浅色纯白 / 深色高一档明度），
+           发丝边框用前景色的低透明（alpha 边框在两种主题下都自然），圆角 1rem，
+           分层柔和投影；hover 时整卡上浮 1px、投影加深、边框略收紧 —— 靠"浮起"
+           而不是变色来回应指针。内边距四边接近（卡片不需要行列表那种上下节奏）。 */
+        padding: 1.125rem 1.25rem;
+        background: hsl(var(--card));
+        border: 1px solid hsl(var(--foreground) / 0.08);
+        border-radius: 1rem;
+        box-shadow: var(--shadow-card);
+        transition: box-shadow 0.3s ease, transform 0.3s ease, border-color 0.3s ease;
       }
       .deck:hover {
-        background: hsl(var(--secondary));
+        transform: translateY(-1px);
+        border-color: hsl(var(--foreground) / 0.14);
+        box-shadow: var(--shadow-card-hover);
       }
       .deck-main {
         min-width: 0;
@@ -413,23 +491,16 @@
       .deck-title {
         display: inline-flex;
         align-items: flex-end;
-        /* 标题要**真的像标题**：原来这里是继承正文的 16px / 400，三级（16/14/12px）全是
-           regular、层级只靠颜色撑着 —— 结果一行里"最有形状"的东西变成了两个描边胶囊
-           （见下面 .deck-meta，用户提的就是这个）。现在 18px + 500（意图 medium，理由同
-           .page-title 那条），层级由**字号 + 颜色**承担（18px 纯黑 / 14px 灰 / 12px 灰），
-           hover 再补下划线。 */
-        font-size: 1.125rem;
+        /* 标题层级由字号 + 字距承担：19px 无衬线、-0.01em 收紧、行高放宽到能呼吸；
+           字重仍是 500（理由同 .page-title）。改版前标题 hover 会上浮 + 加下划线，
+           现在整卡已经会浮起，标题自己不再动，只留外链图标的滑入。 */
+        font-size: 1.1875rem;
         font-weight: 500;
-        line-height: 1;
-        text-underline-offset: 4px;
-        transition: transform 0.3s ease;
+        letter-spacing: -0.01em;
+        line-height: 1.35;
         /* inline-flex 的宽度上限要显式给，否则长标题按 min-content 撑开（配 .deck-main 的
            overflow-wrap 一起用） */
         max-width: 100%;
-      }
-      .deck:hover .deck-title {
-        transform: translateY(-2px);
-        text-decoration: underline;
       }
       /* 整行可点（stretched-link）：hover 高亮是整行（.deck:hover），点击预期自然也是整行，
          但行内只有标题一个 <a>。给标题补一块铺满整行的伪元素，把链接的点击面拉到整行 ——
@@ -452,36 +523,19 @@
         opacity: 1;
         transform: translateX(0);
       }
-      /* 「最近更新」小圆点（构建时按 git 相对时间判断，见 workflow 导航页步骤与
-         docs/site-design.md）：只给最近 RECENT_DAYS（默认 3）天内改过的 deck 加；
-         **取不到提交日期时不加**（浅克隆 / 从未提交 —— fail safe，宁可没有圆点，
-         也不要把整套 deck 都标成「最近更新」）。
-         两个实现要点：
-         * `.deck-title` 是 inline-flex，**flex item 之间的空白会被忽略** —— 所以圆点必须
-           自己带 `margin-left`，靠换行/空格是分不开的；
-         * 圆点是纯装饰（信息由紧随其后的 `.sr-only` 文本承担），所以 `aria-hidden="true"`，
-           别只给它一个颜色就完事。 */
-      .dot {
-        flex: none;
-        align-self: center;
-        width: 6px;
-        height: 6px;
-        margin-left: 0.5rem;
-        border-radius: 9999px;
-        background: var(--accent-blue);
-      }
       .deck-desc {
-        margin-top: 0.5rem;
+        margin-top: 0.375rem;
         font-size: 0.875rem;
+        line-height: 1.55;
         color: hsl(var(--muted-foreground));
         transition: color 0.3s ease;
       }
       .deck:hover .deck-desc {
         color: hsl(var(--foreground));
       }
-      /* hover 时整行底色变成 --secondary（浅色 #F0F0F0），元信息的 muted 灰在白底上是
-         4.74:1（刚过 AA），压到灰底上只有 **4.16:1**（不合格）。副标题早就补了这一手
-         （上一行），元信息是漏的 —— 现在两处一致（2026-10-17 实测重算）。 */
+      /* hover 时把副信息也提到 --foreground：改版前是为了补灰底上的对比度
+         （--secondary 底上 muted 只有 4.16:1），卡片化之后底色不再变，这条保留
+         为纯粹的层级强调（悬停时整卡信息一起"亮"起来），无害。 */
       .deck:hover .deck-meta {
         color: hsl(var(--foreground));
       }
@@ -504,8 +558,12 @@
         flex-wrap: nowrap;
         align-items: center;
         gap: 0;
-        margin-top: 0.5rem;
+        margin-top: 0.625rem;
+        /* 元信息行保留等宽（页数/大小/文件名是"数据"，等宽对齐读起来更稳，
+           也是全站唯一保留的等宽处，与标题的无衬线形成分工） */
+        font-family: var(--font-mono);
         font-size: 0.75rem;
+        letter-spacing: 0.01em;
         color: hsl(var(--muted-foreground));
       }
       /* nowrap 的行里，flex 子项默认 `min-width: auto`（= min-content）会拒绝收缩、直接把行
@@ -562,7 +620,7 @@
 
       /* ---------- 键盘焦点 ---------- */
       :focus-visible {
-        outline: 2px solid hsl(var(--foreground));
+        outline: 2px solid var(--accent);
         outline-offset: 2px;
         border-radius: 4px;
       }
@@ -585,8 +643,12 @@
          只有一两套幻灯片时看着像"浮在中间"；现在由 body 的 flex 布局 + main 的
          flex:1 把它压到底部。这里只留一个最小间距（内容很长时不会贴住卡片）。 */
       footer {
-        margin-top: 1.25rem;
+        margin-top: 2rem;
+        padding-top: 1.25rem;
+        border-top: 1px solid hsl(var(--foreground) / 0.08);
         text-align: center;
+        /* 时间戳是数据，等宽（与元信息行同一分工） */
+        font-family: var(--font-mono);
         font-size: 0.75rem;
         color: hsl(var(--muted-foreground));
       }
@@ -610,13 +672,16 @@
         .beam {
           display: none;
         }
-        /* 这三处的 transition 也是**动效**（头像 180° 旋转、标题上浮 2px、外链图标滑 24px），
+        /* 这几处的 transition 也是**动效**（头像 180° 旋转、卡片上浮、外链图标滑 24px），
            原来只关了淡入与光带，漏了它们（2026-10-17 复核指出）。只关 transform 类的位移；
            颜色过渡不触发前庭反应，保留。 */
         .avatar,
-        .deck-title,
+        .deck,
         .deck-title .ext {
           transition: none;
+        }
+        .deck:hover {
+          transform: none;
         }
       }
     </style>
@@ -630,6 +695,9 @@
       // 这段在首次绘制前执行，避免闪一下浅色再变深。
       (function () {
         var root = document.documentElement;
+        // 「JS 可用」标记：筛选工具栏只在 JS 可用时才显示（CSS 认 html.js），
+        // 否则一个点了没反应的输入框会比没有更糟。
+        root.classList.add("js");
         // 极老的浏览器可能没有 matchMedia：给个等价的桩，别让整段脚本在这里抛异常
         // （那样连点击监听都注册不上，按钮彻底失效）
         var query = window.matchMedia
@@ -651,7 +719,7 @@
           if (colors.length) {
             colors.forEach(function (meta) {
               meta.removeAttribute("media");
-              meta.setAttribute("content", dark ? "#09090B" : "#FFF");
+              meta.setAttribute("content", dark ? "#0F1114" : "#FBFAF8");
             });
           }
         }
@@ -806,14 +874,24 @@
     </header>
 
     <main>
-      <!-- ================= 幻灯片 ================= -->
-      <!-- 这一节没有自己的标题：页面标题（h1 Slides）已经在顶栏里，这里再写一遍就是重复 -->
-      <section class="fade" style="--i: 1">
-        <!--SLIDES-->
-      </section>
+      <!-- 筛选工具栏：只在 JS 可用时显示（见 CSS 的 html.js 规则），逻辑在 body 末尾的脚本 -->
+      <div class="toolbar" role="search">
+        <input
+          id="filter"
+          type="search"
+          placeholder="筛选标题或文件名…"
+          aria-label="筛选幻灯片与成品幻灯片"
+          autocomplete="off"
+        />
+        <span class="toolbar-count" id="filterCount" aria-live="polite"></span>
+      </div>
+      <!-- ================= 内容区块（workflow 生成：幻灯片 / 成品幻灯片） ================= -->
+      <!-- 区块标题（h2）与卡片都由 workflow 写进来，这里只留注入点，不再自带 section -->
+      <!--SLIDES-->
+      <p class="no-results" id="noResults" hidden>没有匹配的内容，换个关键词试试。</p>
     </main>
 
-    <footer class="fade" style="--i: 2">
+    <footer class="fade" style="--i: 3">
       <!--META-->
     </footer>
     <span id="themeStatus" class="sr-only" role="status" aria-live="polite"></span>
@@ -821,6 +899,39 @@
     <noscript>
       <p class="sr-only">当前浏览器未启用 JavaScript，页面固定为浅色主题。</p>
     </noscript>
+
+    <script>
+      // 列表筛选：按标题 / 说明 / 元信息 / 文件名做不区分大小写的子串匹配。
+      // 卡片的全部可见文字都在 DOM 里，直接读 textContent 就够了 —— 不需要构建时
+      // 额外往卡片里埋数据属性（少一处 workflow 与模板的耦合）。
+      // 渐进增强：这段脚本不存在或报错时，工具栏不显示（CSS 靠 html.js 控制）、
+      // 列表完整可见，不影响任何链接。
+      (function () {
+        var input = document.getElementById("filter");
+        if (!input) return;
+        var decks = Array.prototype.slice.call(document.querySelectorAll(".deck"));
+        var count = document.getElementById("filterCount");
+        var empty = document.getElementById("noResults");
+        function run() {
+          var q = input.value.trim().toLowerCase();
+          var visible = 0;
+          decks.forEach(function (d) {
+            var hit = !q || d.textContent.toLowerCase().indexOf(q) !== -1;
+            d.hidden = !hit;
+            if (hit) visible++;
+          });
+          if (count) count.textContent = q ? "显示 " + visible + " / " + decks.length : "";
+          if (empty) empty.hidden = visible !== 0;
+        }
+        input.addEventListener("input", run);
+        input.addEventListener("keydown", function (event) {
+          if (event.key === "Escape") {
+            input.value = "";
+            run();
+          }
+        });
+      })();
+    </script>
   </body>
 </html>
 <!-- tortrixx/slides · 仓库约定见 AGENTS.md -->

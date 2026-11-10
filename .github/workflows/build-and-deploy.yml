@@ -4,10 +4,11 @@
 #
 # 目录约定：
 #   slides/<名称>/main.typ  →  https://<用户名>.github.io/<仓库名>/<名称>.pdf
+#   prebuilt/<文件>.pdf|.ppt|.pptx（成品幻灯片，不经编译）→  …/<仓库名>/prebuilt/<文件>
 #   首页（自动生成的导航页）→  https://<用户名>.github.io/<仓库名>/
 #
 # 四个 job 各司其职，权限互不重叠：
-#   verify  → 门禁：跑 verify-site.sh --build（①~⑪）                  （contents: read）
+#   verify  → 门禁：跑 verify-site.sh --build（①~⑫）                  （contents: read）
 #   build   → 装字体 + 编译 PDF（增量）+ 生成导航页 + 上传产物       （contents: read）
 #   deploy  → 把 build/ 目录发布到 GitHub Pages                     （pages/id-token: write）
 #   release → 按日期发版并创建 Release，附上全部 PDF                 （contents: write）
@@ -30,6 +31,14 @@ on:
   # 天然排除 PR；build 在 PR 上不恢复增量缓存（恢复步只认 main push），退化为全量编译，结果不变。
   pull_request:
   workflow_dispatch: # 支持在 Actions 页面手动运行（只构建/部署，不发版本）
+  schedule:
+    # 每天定时重建 + 重新部署（不发版，release job 的 if 不认 schedule 事件）。
+    # 为什么还在：页脚时间戳是构建时间，只靠 push 触发的话，长时间不推送它就停在
+    # 几周前，看着像站点没人维护。每天重建一次，它就不会过期。（历史上这里还有个
+    # 更强的理由——首页「最近更新」圆点的窗口是构建时按相对时间算的，不重建就说谎；
+    # 圆点已于 2026-11 移除，排序本身已表达新旧，见 docs/site-design.md。）
+    # cron 是 UTC：19:23 UTC = 次日 03:23（Asia/Shanghai）。
+    - cron: "23 19 * * *"
 
 env:
   # Typst 版本。锁版本可保证构建可复现。
@@ -41,11 +50,6 @@ env:
   BUILD_DIR: build
   # 按日期发版时用哪个时区决定 tag 里的日期（想用 UTC 就写 UTC）
   RELEASE_TZ: "Asia/Shanghai"
-  # 首页卡片上「最近更新」小圆点的判定窗口（天）。导航页步骤用
-  # `git log --since="${RECENT_DAYS} days ago"` 判断（交给 git 做相对时间，不自己解析日期：
-  # BSD/GNU 的 `date -d` 不通用，是本仓库踩过的坑）。改这个值 = workflow 哈希变 = 下一次
-  # push 全量重编一次，这是本仓库的既定语义。
-  RECENT_DAYS: "3"
   # 代码块（raw）用的字体：Maple Mono Normal NF。Ubuntu 源里没有这个字体，从上游 Release
   # 固定版本下载。版本 + 两个 sha256 都钉死，理由和 TYPST_VERSION 一样：字体换了排版就会变，
   # 而这些值写在 workflow 文件里 → workflow 哈希变 → .build-stamp 失配 → 自动全量重编一次。
@@ -67,7 +71,7 @@ jobs:
   #
   # 为什么值得单开一个 job 而不是塞进 build：这段 CI 逻辑里有几个**静默失效**的不变量
   # ——stamp 基准、文件夹名护栏、编译失败必须 exit 1、删了 deck 要清残留。它们破了不会
-  # 报错，只会安静地发布残缺内容或复用旧 PDF。verify-site.sh --build 真跑 ①~⑪ 来守它们。
+  # 报错，只会安静地发布残缺内容或复用旧 PDF。verify-site.sh --build 真跑 ①~⑫ 来守它们。
   #
   # 为什么不塞进 build 的步骤里：build 最后会写 .build-stamp。若「编译 → 写 stamp →
   # 门禁失败」这个顺序成立，stamp 已经落盘，下次 push 会以为编译过了而跳过重编 ——
@@ -81,7 +85,7 @@ jobs:
     name: 校验 CI 逻辑（门禁）
     runs-on: ubuntu-24.04
     if: github.event.deleted != true
-    # 这个 job 会把编译步真跑 18 次（①~⑪ 里的多数；2026-10-17 加 ⑦b 页数夹具后 16 → 18），
+    # 这个 job 会把编译步真跑 18 次（①~⑫ 里的多数；2026-10-17 加 ⑦b 页数夹具后 16 → 18），
     # 给个上限免得异常时一直挂着
     timeout-minutes: 10
     steps:
@@ -221,24 +225,7 @@ jobs:
           if ! python3 -c 'import sys, zoneinfo; zoneinfo.ZoneInfo(sys.argv[1])' "$tz" 2>/dev/null; then
             echo "::error::RELEASE_TZ 非法（'${tz}'）：zoneinfo 解析不了（或 runner 上没有 python3）"; exit 1
           fi
-          # RECENT_DAYS 决定首页「最近更新」圆点的窗口，会原样拼进
-          # `git log --since="${RECENT_DAYS} days ago"`。**必须显式校验**：值写错（'abc'、空、
-          # 负数、带单位）时 git 不报错、只是把 --since 解析成一个过去的/无效的时间点，
-          # 结果是**圆点一个都不出现、CI 全绿**（实测 'abc' → 0 个圆点、rc=0）——
-          # 又一个静默失效。所以只接受 1–3650 的正整数，其余 fail closed。
-          # 注意用的是 `${RECENT_DAYS-3}`（**不带冒号**）：变量**未设置**时取默认 3
-          # （导航页那步也是这个兜底，两边一致；门禁里有用最小 env 跑这一步的正对照），
-          # 但**显式设成空串**（`RECENT_DAYS: ""`）会被下面拦下 —— 那是配置写漏，不是"没配"。
-          days="${RECENT_DAYS-3}"
-          case "$days" in
-            ''|*[!0-9]*)
-              echo "::error::RECENT_DAYS 非法（'${days}'）：必须是正整数（天数）"; exit 1 ;;
-          esac
-          if [ "$days" -lt 1 ] || [ "$days" -gt 3650 ]; then
-            echo "::error::RECENT_DAYS 非法（'${days}'）：必须在 1–3650 之间"; exit 1
-          fi
-
-          echo "BUILD_DIR=${BUILD_DIR}（归一化后 '${norm}'） TYPST_VERSION=${TYPST_VERSION} RELEASE_TZ=${tz} RECENT_DAYS=${days}"
+          echo "BUILD_DIR=${BUILD_DIR}（归一化后 '${norm}'） TYPST_VERSION=${TYPST_VERSION} RELEASE_TZ=${tz}"
 
       # 同 verify job：把所有 deck 的 @preview import 汇总成一个可编译的 .typ，
       # 给 setup-typst 的 cache-dependency-path 当缓存 key 的哈希输入（细节见 verify job 同名单步）。
@@ -510,14 +497,85 @@ jobs:
           [ -f assets/icon.png ] || { echo "::error::缺少站点资源 assets/icon.png"; exit 1; }
           cp assets/icon.png "$BUILD_DIR/icon.png"
 
-          # ---------- 1) 为每套幻灯片生成一张卡片 ----------
+          # ---------- 0b) 成品幻灯片：prebuilt/ → build/prebuilt/ ----------
+          # prebuilt/ 里放的是**成品**幻灯片（用其它工具做好的 PDF / PPT / PPTX，不经过 Typst
+          # 编译），构建时原样拷进站点根下的 prebuilt/ 子目录，首页单独列一个「成品幻灯片」区块。
+          # 先把 build/prebuilt 整棵删掉再重拷：build/ 是 actions/cache 的缓存对象，
+          # 不先删的话，源文件删掉后产物会永久残留并继续被发布（与上面清 build/ 的
+          # 旧文件是同一个道理）。注意这一步在清理循环**之后**：清理循环会把 build/prebuilt
+          # 当成「非 PDF 的残留」删掉，正好省了单独处理缓存里旧内容。
+          rm -rf "$BUILD_DIR/prebuilt"
+          if [ -d prebuilt ]; then
+            for src in prebuilt/*; do
+              [ -f "$src" ] || continue
+              fname="$(basename "$src")"
+              # 点号开头的是隐藏文件（.gitkeep 之类），不是发布物，安静跳过
+              case "$fname" in .*) continue ;; esac
+              lower="$(printf '%s' "$fname" | tr 'A-Z' 'a-z')"
+              # .md 是旁车说明（给文件配标题/说明用的，见 tools/file-meta.py）与目录说明，
+              # 不是发布物；其余非 pdf/ppt/pptx 一律报错 —— 静默跳过会让人以为发布成功了
+              case "$lower" in *.md) continue ;; esac
+              case "$lower" in
+                *.pdf | *.ppt | *.pptx) ;;
+                *)
+                  echo "::error::prebuilt/${fname} 的扩展名不在 .pdf / .ppt / .pptx 之列：成品幻灯片只发布这三种，其它文件请勿放进 prebuilt/"
+                  exit 1 ;;
+              esac
+              # 文件名护栏与幻灯片目录名同一套（AGENTS.md §3.8）：文件名会直接成为 URL 的一部分。
+              # 含换行时 basename 会把换行吃掉、两个文件落到同一个产物名上互相覆盖，所以先拦。
+              case "$fname" in
+                *$'\n'* | *$'\r'*)
+                  echo "::error::prebuilt/ 下的文件名含换行或回车（$(printf '%q' "$fname")），请改名"
+                  exit 1 ;;
+              esac
+              stem="${fname%.*}"
+              unsafe="$(printf '%s' "$stem" | LC_ALL=C tr -d 'A-Za-z0-9._-' | LC_ALL=C tr -d '\200-\377')"
+              if [ -n "$unsafe" ]; then
+                echo "::error::prebuilt/${fname} 的主名含不安全的字符（$(printf '%q' "$unsafe")），请只用汉字/字母/数字/点/下划线/连字符"
+                exit 1
+              fi
+              # GitHub Pages 单文件上限 100 MB：在这里就报错，别等部署环节含糊地失败
+              fbytes="$(wc -c < "$src" | tr -d ' ')"
+              if [ "$fbytes" -gt 100000000 ]; then
+                echo "::error::prebuilt/${fname} 有 ${fbytes} 字节，超过 GitHub Pages 的单文件 100 MB 上限"
+                exit 1
+              fi
+              mkdir -p "$BUILD_DIR/prebuilt"
+              cp "$src" "$BUILD_DIR/prebuilt/$fname"
+            done
+          fi
+
+          # ---------- 1) 为每个条目生成一张卡片（幻灯片与成品幻灯片同列） ----------
           items="$RUNNER_TEMP/slides-items.html"
           : > "$items"
           count=0
+          n_deck_cards=0
+          n_file_cards=0
+
+          # 文件大小的显示口径（幻灯片与成品幻灯片共用一份，别写两遍漂移）：
+          # 1 KB 以下显示 B；不到 1 MiB 的用 KB（封顶 1023，免得 1048575 被四舍五入成 "1024 KB"）
+          format_size() {
+            awk -v b="$1" 'BEGIN { if (b < 1024) { printf "%d B", b } else if (b < 1048576) { kb = b / 1024; if (kb > 1023) kb = 1023; printf "%.0f KB", kb } else { printf "%.1f MB", b / 1048576 } }'
+          }
+          # 页数（幻灯片 PDF 与成品 PDF 共用）：Typst 产出的 PDF 未压缩，页树根节点长这样：
+          # `/Type/Pages/Count 49`。**必须锚在 `/Type/Pages` 上**，不能只找 `/Count` 取最大值：
+          # 大纲（书签）里也有 `/Type/Outlines … /Count N`，那个 N 是**标题数**不是页数
+          # （实测：1 页写 2 个 `=` 标题 → 旧写法显示「2 页」；门禁 ⑦b 用夹具钉着这一条）。
+          # 取第一条匹配；读不到（PDF 被压缩等）就输出空 —— 调用方整枚徽章都不渲染，
+          # 宁可没有页数，也不显示一个错的。grep 无匹配时退出 1，在 set -euo pipefail 下
+          # 会直接终止整个步骤，所以末尾 `|| true` 必须留着。
+          count_pages() {
+            strings "$1" \
+              | grep -oE '/Type[[:space:]]*/Pages[[:space:]]*/Count[[:space:]]+[0-9]{1,6}' \
+              | grep -oE '[0-9]{1,6}$' | head -n 1 || true
+          }
 
           # ---------- 1a) 先定顺序：最新改动的排最前 ----------
-          # 顺序 = 该 deck 最后一次提交的日期（%cs，YYYY-MM-DD）倒序；同一天按文件夹名升序兜底；
+          # 顺序 = 该条目最后一次提交的日期（%cs，YYYY-MM-DD）倒序；同一天按名字升序兜底；
           # 拿不到日期的（浅克隆 / 从未提交）排最后。日期**只用来排序，不渲染到页面上**。
+          # 幻灯片与成品幻灯片**同列混排、不分区块**（2026-11 定版）：两边的日期是同一个
+          # 口径（各自路径的最后一次提交），混排后「最新在前」对整个列表同时成立；
+          # 两类内容的区分靠卡片自身的元信息（deck 是 PDF + 页数，成品多一枚格式徽章）。
           # 为什么要显式排：原来直接 `for dir in slides/*/`，用的是 bash 的 glob 顺序 —— 那是
           # 「当前 locale 下的字典序」，跟改没改无关，而且**中文名的先后会随 locale 变**
           # （实测同一组名字：C.UTF-8 把中文排最后、en_US.UTF-8 排最前、zh_CN.UTF-8 又排最后），
@@ -533,15 +591,28 @@ jobs:
             modified="$(git log -1 --format=%cs -- "$dir")"
             # 空日期换成 0000-00-00 再进文件：`read` 会吃掉行首的 IFS 空白，直接写空值会把
             # 「空日期」那一行解析错位（第一个字段变成文件名）。倒序排序时 0000-00-00 天然在最后。
-            printf '%s\t%s\n' "${modified:-0000-00-00}" "$name" >> "$deck_list"
+            printf '%s\t%s\t%s\n' "${modified:-0000-00-00}" "$name" "deck" >> "$deck_list"
           done
+
+          # 成品幻灯片同口径入列：源头是 0b 已拷好的 build/prebuilt —— 那才是真正要发布
+          # 的集合（README 与旁车已经在那边被过滤掉了）。
+          if [ -d "$BUILD_DIR/prebuilt" ]; then
+            for staged in "$BUILD_DIR"/prebuilt/*; do
+              [ -f "$staged" ] || continue
+              fname="$(basename "$staged")"
+              fmodified="$(git log -1 --format=%cs -- "prebuilt/$fname")"
+              printf '%s\t%s\t%s\n' "${fmodified:-0000-00-00}" "$fname" "file" >> "$deck_list"
+            done
+          fi
 
           # 取 main.typ 里第一个 title / subtitle 的值。解析逻辑在 tools/deck-meta.py 里，
           # **不在 shell 里逐行 sed**：值可能是跨行的 `[ … ]`、里面可能含 `]`（`数组 a[0] 的用法`）
-          # 或转义引号（`"他说 \"你好\""`），逐行正则会**静默**截断标题（截断后看着还挺合理，
+          # 或转义引号（`\"他说 \\\"你好\\\"\"`），逐行正则会**静默**截断标题（截断后看着还挺合理，
           # 构建与门禁全绿）。单独成文件也让它能被门禁直接单测（verify-site.sh 的 ①c）。
           # title 取不到时退回文件夹名；subtitle 取不到（含 subtitle: [] 和 A4 文档）时
           # 卡片**不渲染**那行描述，而不是塞一句默认文案 —— 少一行说明总好过一句假话。
+          # 成品文件的标题/说明同理由 tools/file-meta.py 取（旁车 .md 优先，其次文件自带
+          # 元数据），取不到标题时退回文件主名，与 deck 的兜底语义一致。
           command -v python3 >/dev/null || { echo "::error::缺少 python3（解析 title/subtitle 需要它）"; exit 1; }
           pick() { python3 tools/deck-meta.py "$1" "$2"; }
           escape() {
@@ -550,77 +621,50 @@ jobs:
             sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g' -e "s/'/\&#39;/g"
           }
 
-          # 按排好的顺序生成卡片（最新在前）。用 while read 而不是 glob：glob 的顺序改不了。
-          while IFS=$'\t' read -r modified name; do
+          # 统一排序后逐条生成卡片（最新在前）。用 while read 而不是 glob：glob 的顺序改不了。
+          while IFS=$'\t' read -r modified name kind; do
             # 占位日期换回空串（写成一行的 if，别写 `[ … ] && x=`：那种写法在 set -e 下
-            # 会留下非零退出码，落在函数/脚本末尾时会把整步判成失败）
+            # 会留下非零退出码，落在函数/脚本末尾时会把整步判成失败）。
+            # `$modified` 自此只剩排序的痕迹，卡片一律不渲染它。
             if [ "$modified" = "0000-00-00" ]; then modified=""; fi
-            pdf="$BUILD_DIR/$name.pdf"
             count=$((count + 1))
-            main_typ="slides/$name/main.typ"
+            if [ "$kind" = "deck" ]; then
+              n_deck_cards=$((n_deck_cards + 1))
+              pdf="$BUILD_DIR/$name.pdf"
+              main_typ="slides/$name/main.typ"
 
-            title="$(pick "$main_typ" title)"
-            [ -n "$title" ] || title="$name"
+              title="$(pick "$main_typ" title)"
+              [ -n "$title" ] || title="$name"
 
-            subtitle="$(pick "$main_typ" subtitle)"
+              subtitle="$(pick "$main_typ" subtitle)"
 
-            # 「最近更新」小圆点（docs/site-design.md 里就写着：想透出"新旧"，比恢复整列日期
-            # 更轻的做法是给最近改过的行加个小圆点）。判定交给 git 自己做相对时间：
-            # `--since` 过滤掉更早的提交，输出非空 ⇒ 这套 deck 最近改过。
-            # **不自己解析日期**：BSD 的 `date -j -f` 与 GNU 的 `date -d` 不通用，本仓库踩过。
-            # 条件里要求 `$modified` 非空是**故意的 fail safe**：取不到提交日期（浅克隆等）时
-            # 不标记 —— 否则会把整套 deck 都标成「最近更新」，那比没有标记更误导人。
-            # 门禁 ⑩ 规定 <main> 里不许出现 YYYY-MM-DD，所以标记只能是圆点 + 文案，不带日期。
-            fresh_mark=""
-            if [ -n "$modified" ] \
-              && [ -n "$(git log -1 --since="${RECENT_DAYS:-3} days ago" --format=%H -- "slides/$name/")" ]; then
-              fresh_mark="<span class=\"dot\" aria-hidden=\"true\"></span><span class=\"sr-only\">最近更新</span>"
-            fi
+              size="$(format_size "$(wc -c < "$pdf" | tr -d ' ')")"
 
-            bytes="$(wc -c < "$pdf" | tr -d ' ')"
-            # 1 KB 以下显示 B；不到 1 MiB 的用 KB（封顶 1023，免得 1048575 被四舍五入成 "1024 KB"）
-            size="$(awk -v b="$bytes" 'BEGIN { if (b < 1024) { printf "%d B", b } else if (b < 1048576) { kb = b / 1024; if (kb > 1023) kb = 1023; printf "%.0f KB", kb } else { printf "%.1f MB", b / 1048576 } }')"
+              # 页数读不到时**整枚胶囊都不放**（否则页面上会冒出一个只有「页」字的空胶囊）
+              pages="$(count_pages "$pdf")"
+              pages_html=""
+              if [ -n "$pages" ]; then pages_html="<span class=\"badge\">${pages} 页</span>"; fi
 
-            # 页数：Typst 产出的 PDF 未压缩，页树根节点的对象长这样：`/Type/Pages/Count 49`。
-            # **必须锚在 `/Type/Pages` 上**，不能只找 `/Count` 再取最大值：大纲（书签）里也有
-            # `/Type/Outlines … /Count N`，而那个 N 是**标题数**，不是页数。旧写法
-            # （`grep '/Count ' | sort -n | tail -1`）于是会让「标题数 > 页数」的 deck 显示错的页数
-            # ——实测：1 页写 2 个 `=` 标题 → 卡片显示「2 页」（2026-10-17 独立复核实测）。
-            # 现有两套 deck 恰好都是页数 > 标题数（template 20 页/3 标题、26-09-30 49 页/5 标题），
-            # 所以一直没暴露；门禁 ⑦b 现在用「1 页 2 标题」的夹具正面钉住这一条。
-            # 取第一条匹配（Typst 只产出一个页树根节点）；万一以后 PDF 被压缩、读不到，
-            # 就整枚徽章都不渲染 —— 宁可没有页数，也不显示一个错的。
-            # 末尾的 `|| true`：grep 无匹配时退出 1，在本步的 set -euo pipefail 下
-            # 会**直接终止整个步骤**（那就不是「没有页数」而是整次部署被跳过），所以必须吞掉。
-            pages="$(strings "$pdf" \
-              | grep -oE '/Type[[:space:]]*/Pages[[:space:]]*/Count[[:space:]]+[0-9]{1,6}' \
-              | grep -oE '[0-9]{1,6}$' | head -n 1)" || true
-            # 读不到页数时**整枚胶囊都不放**（否则页面上会冒出一个只有「页」字的空胶囊）
-            pages_html=""
-            if [ -n "$pages" ]; then pages_html="<span class=\"badge\">${pages} 页</span>"; fi
+              title_html="$(printf '%s' "$title" | escape)"
+              name_html="$(printf '%s' "$name" | escape)"
+              size_html="<span class=\"badge\">${size}</span>"
 
-            title_html="$(printf '%s' "$title" | escape)"
-            name_html="$(printf '%s' "$name" | escape)"
-            size_html="<span class=\"badge\">${size}</span>"
-            # 注意：$modified 只用于 1a) 的排序，**不渲染**（见那边的注释）。
+              # 副标题为空（没写 / subtitle: [] / A4 文档）时整行都不输出。
+              # 用变量而不是「if 里再写一遍 cat <<HTML」，是为了让卡片结构在整个脚本里只有一份。
+              # 变量里只放标签本身，不带缩进也不带换行 —— 缩进和换行由模板那一行提供；
+              # 变量里若自带换行，空串时会把下一行顶下去，在卡片中间留下一行纯空格。
+              # 也注意别把变量写在行首：YAML 的块标量会因此提前结束。
+              desc_html=""
+              if [ -n "$subtitle" ]; then
+                desc_html="<div class=\"deck-desc\">$(printf '%s' "$subtitle" | escape)</div>"
+              fi
 
-            # 副标题为空（没写 / subtitle: [] / A4 文档）时整行都不输出。
-            # 用变量而不是「if 里再写一遍 cat <<HTML」，是为了让卡片结构在整个脚本里只有一份。
-            # 变量里只放标签本身，不带缩进也不带换行 —— 缩进和换行由模板那一行提供；
-            # 变量里若自带换行，空串时会把下一行顶下去，在卡片中间留下一行纯空格。
-            # 也注意别把变量写在行首：YAML 的块标量会因此提前结束。
-            desc_html=""
-            if [ -n "$subtitle" ]; then
-              desc_html="<div class=\"deck-desc\">$(printf '%s' "$subtitle" | escape)</div>"
-            fi
-
-            # 卡片结构对应 index.template.html 里的 .deck 样式（纯文字列表，没有封面图）
-            cat <<HTML >> "$items"
+              # 卡片结构对应 index.template.html 里的 .deck 样式（纯文字列表，没有封面图）
+              cat <<HTML >> "$items"
                   <div class="deck fade" style="--i: $count">
                     <div class="deck-main">
                       <a class="deck-title" href="${name_html}.pdf" target="_blank" rel="noopener noreferrer">
                         ${title_html}
-                        ${fresh_mark}
                         <svg class="ext" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6" /><path d="M10 14 21 3" /><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /></svg>
                       </a>
                       ${desc_html}
@@ -631,6 +675,49 @@ jobs:
                     <span class="beam"></span>
                   </div>
           HTML
+            else
+              n_file_cards=$((n_file_cards + 1))
+              staged="$BUILD_DIR/prebuilt/$name"
+              stem="${name%.*}"
+              ext_lower="$(printf '%s' "${name##*.}" | tr 'A-Z' 'a-z')"
+              type_label="$(printf '%s' "$ext_lower" | tr 'a-z' 'A-Z')"
+
+              meta_out="$(python3 tools/file-meta.py "prebuilt/$name")"
+              ftitle="$(printf '%s' "$meta_out" | sed -n '1p')"
+              [ -n "$ftitle" ] || ftitle="$stem"
+              fdesc="$(printf '%s' "$meta_out" | sed -n '2p')"
+
+              fsize="$(format_size "$(wc -c < "$staged" | tr -d ' ')")"
+              # 只有 PDF 尝试读页数（PPT/PPTX 没有这个概念）；读不到就不渲染，同一套口径
+              fpages_html=""
+              if [ "$ext_lower" = "pdf" ]; then
+                fpages="$(count_pages "$staged")"
+                if [ -n "$fpages" ]; then fpages_html="<span class=\"badge\">${fpages} 页</span>"; fi
+              fi
+
+              ftitle_html="$(printf '%s' "$ftitle" | escape)"
+              fname_html="$(printf '%s' "$name" | escape)"
+              fdesc_html=""
+              if [ -n "$fdesc" ]; then
+                fdesc_html="<div class=\"deck-desc\">$(printf '%s' "$fdesc" | escape)</div>"
+              fi
+
+              cat <<HTML >> "$items"
+                  <div class="deck fade" style="--i: $count">
+                    <div class="deck-main">
+                      <a class="deck-title" href="prebuilt/${fname_html}" target="_blank" rel="noopener noreferrer">
+                        ${ftitle_html}
+                        <svg class="ext" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6" /><path d="M10 14 21 3" /><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /></svg>
+                      </a>
+                      ${fdesc_html}
+                      <div class="deck-meta">
+                        ${fpages_html}<span class="badge">${type_label}</span><span class="badge">${fsize}</span><span class="file">${fname_html}</span>
+                      </div>
+                    </div>
+                    <span class="beam"></span>
+                  </div>
+          HTML
+            fi
           done < <(LC_ALL=C sort -t "$(printf '\t')" -k1,1r -k2,2 "$deck_list")
 
           # process substitution 的退出码**不参与** set -e / pipefail：sort 万一失败（命令没了、
@@ -638,7 +725,7 @@ jobs:
           # 首页变成一个列表都没有，而 CI 全绿（实测：把 sort 换成不存在的命令，输出是
           # 「已生成 build/index.html（0 套幻灯片）」、rc=0）。所以这里显式兜底。
           # 可以直接要求 count>0：前面「编译」那步已经保证「一套都没有」时 exit 1，
-          # 能走到这里就必然有 deck；真为 0 只可能是排序/解析坏了 —— 宁可 fail closed。
+          # 能走到这里就必然有条目；真为 0 只可能是排序/解析坏了 —— 宁可 fail closed。
           if [ "$count" -eq 0 ]; then
             echo "::error::导航页生成了 0 张卡片（sort 或 TSV 解析出问题了？）"
             exit 1
@@ -668,11 +755,12 @@ jobs:
             { print }
           ' "$template" > "$BUILD_DIR/index.html"
 
-          echo "已生成 $BUILD_DIR/index.html（$count 套幻灯片，$(wc -c < "$BUILD_DIR/index.html" | tr -d ' ') bytes）"
+          echo "已生成 $BUILD_DIR/index.html（$n_deck_cards 套幻灯片 + $n_file_cards 个成品幻灯片，共 $count 项，$(wc -c < "$BUILD_DIR/index.html" | tr -d ' ') bytes）"
 
-      # 给 release job 下载用的普通产物（下载后仍是 build/xxx.pdf，便于直接用通配符上传）
+      # 给 release job 下载用的普通产物（下载后仍是 build/xxx.pdf 与 build/prebuilt/*，
+      # 便于直接用通配符上传）
       # 只在同一次运行内被用到，保留 3 天：既不会堆积，隔天重跑失败的 job 也还拿得到
-      - name: 上传 PDF 产物
+      - name: 上传构建产物
         uses: actions/upload-artifact@v7
         with:
           name: slides-build
@@ -688,7 +776,7 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # 2) 部署到 GitHub Pages
-  #    只在 main 分支的 push / 手动运行（且手动运行时也选的 main）才部署；
+  #    只在 main 分支的 push / 手动运行 / 每日定时（且手动运行时也选的 main）才部署；
   #    tag 推送和 release 事件只发版本，不动线上站点。
   # ---------------------------------------------------------------------------
   deploy:
@@ -697,7 +785,7 @@ jobs:
     # deleted 防护对齐 verify/build/release 三个 job（2026-10-17 加）：当前虽无实际触发路径
     # （删除分支会带着 build 一起被跳过；删 tag 时 github.ref 不是 refs/heads/main），
     # 但它是唯一一个**能在 push 事件上跑却又没这道防护**的 job，属于防线不对称。
-    if: github.event.deleted != true && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    if: github.event.deleted != true && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
     runs-on: ubuntu-24.04
     # 上限：部署本身很快，卡住通常是 Pages 侧问题，别让它占满默认 6 小时
     timeout-minutes: 10
@@ -856,6 +944,22 @@ jobs:
               name="$(basename "$pdf")"
               echo "- [\`${name}\`](${site}/${name}) · [下载](https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag_url}/${name})"
             done
+            # 成品幻灯片（prebuilt/ 的成品 PDF/PPT）也列进说明：站点里在 prebuilt/ 子目录下，
+            # Release 附件由后面的「补传成品幻灯片」步骤统一上传（两个发布分支都覆盖）。
+            if [ -d "$BUILD_DIR/prebuilt" ]; then
+              has_files=""
+              for f in "$BUILD_DIR"/prebuilt/*; do [ -e "$f" ] || continue; has_files=1; done
+              if [ -n "$has_files" ]; then
+                echo
+                echo "成品幻灯片（成品文件，站点上同样可以直接打开）："
+                echo
+                for f in "$BUILD_DIR"/prebuilt/*; do
+                  [ -e "$f" ] || continue
+                  fname="$(basename "$f")"
+                  echo "- [\`${fname}\`](${site}/prebuilt/${fname}) · [下载](https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag_url}/prebuilt/${fname})"
+                done
+              fi
+            fi
             echo
             echo "站点首页：<${site}/>"
             echo
@@ -907,5 +1011,33 @@ jobs:
           # 未加引号的 glob 由 shell 展开，每个文件一个参数，含空格的路径也安全。
           gh release upload "$TAG" "$BUILD_DIR"/*.pdf --clobber --repo "$GITHUB_REPOSITORY"
           echo "已更新 ${TAG} 的附件（${n} 个）；说明未改动"
+
+      # 成品幻灯片附件：上面两个发布分支（softprops 建版 / gh 只补附件）都只处理
+      # build/*.pdf，prebuilt/ 下的成品文件在这里统一补传。到这一步 Release 必然已存在
+      # （分支一刚由 softprops 建好，分支二本来就存在），所以一把 gh 上传即可，
+      # 语义与「只更新附件」一致：只动附件、不碰说明。没有成品幻灯片时整步安静跳过。
+      - name: 补传成品幻灯片（prebuilt/）到 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          if [ ! -d "$BUILD_DIR/prebuilt" ]; then
+            echo "没有 prebuilt/ 产物，跳过"
+            exit 0
+          fi
+          n=0
+          for f in "$BUILD_DIR"/prebuilt/*; do
+            [ -e "$f" ] || continue
+            n=$((n + 1))
+          done
+          if [ "$n" -eq 0 ]; then
+            echo "prebuilt/ 里没有文件，跳过"
+            exit 0
+          fi
+
+          gh release upload "$TAG" "$BUILD_DIR"/prebuilt/* --clobber --repo "$GITHUB_REPOSITORY"
+          echo "已上传 ${n} 个成品幻灯片到 ${TAG}"
 
 # tortrixx/slides · 仓库约定见 AGENTS.md

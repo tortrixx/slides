@@ -32,8 +32,13 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
 3. 生成 `build/index.html` 导航页并部署到 GitHub Pages；
 4. 按**当天日期**创建/更新一个 Release，把全部 PDF 作为附件。
 
-**唯一的目录约定**：`slides/<名称>/main.typ` 存在 → 编译成 `<名称>.pdf`。
-没有 `main.typ` 的文件夹会被忽略（可以安全地放笔记、素材）。
+**两个目录约定**：
+
+- `slides/<名称>/main.typ` 存在 → 编译成 `<名称>.pdf`。
+  没有 `main.typ` 的文件夹会被忽略（可以安全地放笔记、素材）。
+- `prebuilt/<文件>.pdf|.ppt|.pptx` → **成品幻灯片**（其它工具做好的，不经 Typst 编译），原样发布到
+  站点的 `prebuilt/` 子目录，首页与幻灯片同列混排（按更新时间排序），Release 里也作附件。
+  细则见 §4 的「成品幻灯片」与 `prebuilt/README.md`。
 
 新建一套幻灯片：`cp -R slides/template slides/my-talk`（连 `src/` 等资源目录一起复制），
 改名和内容后 push 即可。
@@ -53,6 +58,9 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
 │   └── 26-09-30/             # 实际使用的 deck（自带 src/ 图片等资源）
 │       ├── main.typ
 │       └── src/
+├── prebuilt/                    # 成品幻灯片（.pdf/.ppt/.pptx），不经编译、原样发布
+│   ├── README.md             # 这个目录的约定（放什么、命名、旁车标题）
+│   └── <同名>.md             # 可选旁车：给某个文件配标题/说明（本身不发布）
 ├── .github/
 │   ├── workflows/
 │   │   └── build-and-deploy.yml  # 全部自动化逻辑（唯一的 workflow）
@@ -60,11 +68,12 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
 │       └── setup-fonts/      # 装字体的复合 action（verify/build 共用；它的哈希进了编译环境指纹）
 ├── index.template.html       # 站点首页模板（构建时注入幻灯片列表）
 ├── tools/
-│   └── deck-meta.py          # 从 main.typ 取 title/subtitle（导航页步骤调用；门禁 ①c 直接单测它）
+│   ├── deck-meta.py          # 从 main.typ 取 title/subtitle（导航页步骤调用；门禁 ①c 直接单测它）
+│   └── file-meta.py          # 从 prebuilt/ 的成品文件取标题/说明（旁车 .md > PDF/PPTX 元数据；门禁 ⑫ 单测 PPTX 分支）
 ├── assets/
 │   └── icon.png              # 站点静态资源（左上角头像），构建时拷进 build/
 ├── docs/                     # 设计依据与踩坑史（site-design / gate-design / ci-design / pitfalls）
-├── verify-site.sh            # CI 门禁脚本：抽 workflow/action 脚本 + 语法/lint + 真跑 ①~⑪
+├── verify-site.sh            # CI 门禁脚本：抽 workflow/action 脚本 + 语法/lint + 真跑 ①~⑫
 ├── AGENTS.md                 # 本文件（操作约定；刻意保持精简，见文首分工）
 ├── README.md                 # 6 行：定位一句话 + 在线地址，不放任何清单/操作
 └── .gitignore                # 忽略 build/ 与本地编译出的 /slides/*/main.pdf
@@ -186,14 +195,15 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
 | `release: published` | 只给该 Release 补/覆盖附件，不动说明 |
 | `pull_request` | 只跑 verify + build（门禁 + 试编译）；不部署、不发版、不走增量缓存（全量编译） |
 | `workflow_dispatch` | 手动：选 `main` 则编译+部署；不发版 |
+| `schedule`（每天 03:23 CST） | 编译 + 部署；**不发版**。存在的理由：页脚时间戳是构建时间，只靠 push 触发会停在上次构建（看着像没人维护）——每天重建一次让它保持新鲜。门禁 ②·2 钉着 schedule 与 deploy 的 if |
 
 ### 四个 job
 
 | job | 条件 | 权限 | 作用 |
 | --- | --- | --- | --- |
-| `verify` | `github.event.deleted != true` | 默认（`contents: read`） | 门禁：跑 `verify-site.sh --build`（①~⑪ + Release/tag 逻辑），失败则后面全部不执行 |
+| `verify` | `github.event.deleted != true` | 默认（`contents: read`） | 门禁：跑 `verify-site.sh --build`（①~⑫ + Release/tag 逻辑），失败则后面全部不执行 |
 | `build` | `github.event.deleted != true` | `contents: read` | 装字体（复合 action）→ 增量编译 → 生成导航页 → 上传两份产物 |
-| `deploy` | `github.event.deleted != true` **且** `refs/heads/main` 的 push 或手动 | `pages: write`, `id-token: write` | `actions/deploy-pages` 发布 `build/` |
+| `deploy` | `github.event.deleted != true` **且** `refs/heads/main` 的 push、手动或定时 | `pages: write`, `id-token: write` | `actions/deploy-pages` 发布 `build/` |
 | `release` | `github.event.deleted != true` 且（main push / 推送 tag / release 事件） | `contents: write` | 计算 tag → 写说明 → 建/更新 Release |
 
 `deploy` 用固定的 `pages` concurrency group；`release` 用 `release-<tag>`（main push 时即
@@ -248,7 +258,7 @@ Noto Sans CJK / Inter（2026-10-17 独立复核指出：旧文档写「钉住后
   （2026-10-17 复核实测：`docs` 删 *.md、`.github` 删 workflow 与复合 action、`slides/<deck>/src`
   删未跟踪的真实图片）；另有一道冗余的「不许含 `main.typ`」检查；`TYPST_VERSION` 非空；`RELEASE_TZ` 用
   `python3 -c 'zoneinfo.ZoneInfo(...)'` 实打实解析（`[ -e /usr/share/zoneinfo/… ]` 太松）；
-  `RECENT_DAYS` 必须是 1–3650 的整数；**三处用同一个 `${RELEASE_TZ:-Asia/Shanghai}` 兜底**
+  **三处用同一个 `${RELEASE_TZ:-Asia/Shanghai}` 兜底**
   （`TZ=""` 是 UTC，不是「系统默认」）。危险值（空 / `/` / `.` / `..` / 绝对路径 / 含 `..` /
   含空格）一律 `::error::` + `exit 1`。
 - **目录名护栏**：点号开头（`slides/.hidden`）与含换行/回车都必须报错（前者 `slides/*/` 匹配不到，
@@ -261,14 +271,26 @@ Noto Sans CJK / Inter（2026-10-17 独立复核指出：旧文档写「钉住后
   checkout 必须 `fetch-depth: 0`。卡片数据：标题/副标题由 `tools/deck-meta.py` 取**行序第一个**
   非注释键（title 取不到退回文件夹名，subtitle 取不到整行不渲染）；页数**必须锚
   `/Type/Pages/Count`**（取全文 `/Count` 最大值会把大纲的标题数当页数）；文件夹名/标题/副标题
-  都要 HTML 转义；「最近更新」圆点靠 `git log --since`，取不到日期就不标（fail safe）。
+  都要 HTML 转义。新旧只靠排序表达：**没有「最近更新」圆点**（2026-11 移除——它的窗口
+  语义不可见、且要靠定时重建才不说谎；别再加回来）。注入内容是**一个列表**：幻灯片与
+  成品幻灯片按各自最后一次提交日期**同列混排**，不分区块、没有小标题（全页只有顶栏的
+  h1）；筛选工具栏写在模板里（纯 JS 增强，无 JS 不渲染）。
+- **成品幻灯片（`prebuilt/`）**：只收 `.pdf`/`.ppt`/`.pptx`（`.md` 是旁车/说明，跳过；其余扩展名
+  `::error::`）；文件名护栏与 deck 目录名同口径（§3.8 的字符集 + 不许点号开头/换行）；
+  单文件 >100 MB 报错（Pages 上限）。导航页步骤在清理循环**之后**先 `rm -rf build/prebuilt`
+  再整棵重拷 —— 所以清理白名单**不需要**为它加目录名（加了反而会让已删源文件的副本被
+  缓存永久带下去）。卡片与 deck 同规则（git 日期排序、转义），标题/说明由
+  `tools/file-meta.py` 取（旁车 `<主名>.md`：第一行标题、其余行说明 ＞ PDF `/Title` /
+  PPTX `dc:title` ＞ 文件主名）；Release 附件由 release job 末尾的「补传成品幻灯片」步
+  统一 `gh release upload`（两个 PDF 发布分支都不带 prebuilt/，别往分支里塞）。门禁 ⑫ 钉着这一整条。
 - **站点静态资源**：`assets/` 由导航页那步拷进 `build/`（缺失即 `::error::`，fail closed）；
   拷之前先清掉 `build/` 里非 `*.pdf` / `index.html` / `.build-stamp` 的旧文件，
   **白名单不许用通配、也不许加回任何目录名**（缓存会把它永久带下去并发布出去）。
   头像用仓库内 PNG，**别改回外链**。
 - **站点视觉/前端**：改样式只动 `index.template.html`。`<meta charset>` 留在最前；全页**唯一 h1**；
-  顶栏**一行到底**（窄屏不堆叠）；版式是**纯列表**（别再加封面/缩略图）；字重 `500`（**别写 600**）；
-  行分隔线用 `.deck + .deck::before` 伪元素（**别改回 `border-top`**）；整行可点用 stretched-link
+  顶栏**一行到底**（窄屏不堆叠）；版式是**纯文字卡片列表**（2026-11 改版：每条是一张软卡片——
+  表面色 + 发丝边框 + 分层阴影，hover 上浮；别再加封面/缩略图，也别退回行间分隔线版式）；
+  字重 `500`（**别写 600**）；整卡可点用 stretched-link
   （别加第二个链接）；主题三态 auto/light/dark 且
   `apply(mode === "auto" ? query.matches : mode === "dark")`；装饰 SVG 一律 `aria-hidden`；
   动效保留 `@supports` 与 `prefers-reduced-motion`（该偏好下除了淡入与光带，还要关掉
@@ -278,6 +300,11 @@ Noto Sans CJK / Inter（2026-10-17 独立复核指出：旧文档写「钉住后
   否则长副标题照样溢出）；`.deck-meta` 是 `flex-wrap: nowrap` + `.file { min-width: 0 }`
   （一换行，分隔点就会孤零零落在第二行行首）；hover 时元信息也要提到 `--foreground`
   （`--secondary` 灰底上 muted 只有 4.16:1，不合格）。依据与实测见 docs/site-design.md ⑤。
+  后加的一件（保持同一视觉语言，别另起一套）：筛选工具栏是**功能层**，可以吸顶 + 毛玻璃
+  （`backdrop-filter`），但只在 `html.js` 时显示，筛选靠读卡片 `textContent`，不许为了
+  它往卡片里埋数据属性。字体分工（2026-11 改版定版）：标题/正文/说明用无衬线，
+  等宽只留给元信息行、筛选计数与页脚时间戳；画布是暖纸色（深色为深灰蓝），
+  虚线网格只留极淡的底纹。
 - **产物**：`slides-build`（给 release job，`retention-days: 3`）+ `github-pages`（给 deploy job）。
   两份都只在本运行内使用，保留期刻意压短。
 
@@ -293,8 +320,8 @@ typst compile --format png --pages 6 main.typ '/tmp/p-{p}.png'
 # 本地 Typst 版本应与 workflow 的 TYPST_VERSION 一致（当前 0.15.1）
 
 # 本地跑门禁（CI 里也是同一条命令；改完 workflow 务必先本地过一遍）
-bash verify-site.sh            # 只做静态部分（41 项，含 Release/tag 逻辑，几秒）
-bash verify-site.sh --build    # 再加 ①~⑪ 的编译路径（共 150 项），和 CI 门禁完全同一条命令
+bash verify-site.sh            # 只做静态部分（44 项，含 Release/tag 逻辑，几秒）
+bash verify-site.sh --build    # 再加 ①~⑫ 的编译路径（共 155 项），和 CI 门禁完全同一条命令
 
 # 查看线上状态
 gh run list --repo tortrixx/slides
@@ -335,15 +362,14 @@ CI 逻辑全在 YAML 的 `run: |` 里（含 `.github/actions/` 下复合 action 
 不能只靠肉眼。**`verify-site.sh` 就是 CI 门禁本身**（`verify` job 跑 `--build`），本地可以先跑一遍再推：
 
 ```bash
-bash verify-site.sh            # 静态检查 + Release/tag 逻辑（41 项，几秒，不需要 typst）
-bash verify-site.sh --build    # 再加 ①~⑪ 的编译路径（共 150 项），和 CI 门禁完全同一条命令
+bash verify-site.sh            # 静态检查 + Release/tag 逻辑（44 项，几秒，不需要 typst）
+bash verify-site.sh --build    # 再加 ①~⑫ 的编译路径（共 155 项），和 CI 门禁完全同一条命令
 ```
 
-当前基线：`--build` 全绿 = **150 项通过**（静态 41 + 编译路径 109）。每项的完整说明、对抗验证
+当前基线：`--build` 全绿 = **155 项通过**（静态 44 + 编译路径 111）。每项的完整说明、对抗验证
 记录与手工核对流程见 docs/gate-design.md，这里只留索引：
 
 - ① 冷启动全量：产出 PDF 数、`.build-stamp`、首页卡片数、`icon.png` 进 `build/`、
-  **「最近更新」标记数 = 套数（夹具里每套 deck 都被显式提交成「刚刚」）**、
   页脚时间戳已注入、三个占位注释（SLIDES/COUNT/META）在产物里零残留、
   **产物里的 HTML 注释成对 + 卡片在注释之外**（漏写 `-->` 或把注入点包进注释时，
   「卡片数」这条照样绿，但浏览器一张都看不到 —— 两种坏法要两条断言分别钉）
@@ -361,7 +387,6 @@ bash verify-site.sh --build    # 再加 ①~⑪ 的编译路径（共 150 项）
 - ⑦ 导航页边界：读不到 `/Count` 不渲染页数项（读得到必须渲染）、残留文件清掉而
   `.build-stamp` 保留（根级残留图片**与残留子目录**都照清，白名单不许用 `*.png` 这类通配、
   也不许写回任何目录名 —— 夹具里放了 `build/stale-dir/old.png` 钉这一面）、`BUILD_DIR` 危险值全拒、正常值放行、
-  **`RECENT_DAYS` 非 1–3650 的整数全拒（含空串与 `'14 days'`）**、
   **`RELEASE_TZ` 负例（`Not/AZone` / `Asia/Shangai` / `UTC+8` / `Asia` / `Etc` / `zone.tab` /
   `tzdata.zi`）全拒、`UTC` / `Asia/Shanghai` / 空串放行**、
   **`BUILD_DIR` 的最后一段必须叫 `build`**（`docs` / `.github` / `assets` / `slides/<deck>` 一律被拒，
@@ -383,9 +408,13 @@ bash verify-site.sh --build    # 再加 ①~⑪ 的编译路径（共 150 项）
   ⑨b 编译环境哈希必须覆盖 `setup-fonts` 复合 action（改字体 = 全量重编）；
   ⑨b' 指纹必须含**字体包版本**（`dpkg-query`）；⑨c **指纹失配**（stamp 里 wf_rev 对不上）
   必须退化成全量 —— 把 stamp 比较里 wf_rev 那一项整项删掉时，只有 ⑨c 会红
-- ⑩ 列表顺序：最新在前、同日按名字升序、无日期排最后、日期不渲染进卡片区、
-  **旧 deck / 取不到日期时不得出现「最近更新」标记**
+- ⑩ 列表顺序：最新在前、同日按名字升序、无日期排最后、日期不渲染进卡片区
 - ⑪ 样式表花括号平衡（静态计数，统计前去掉注释）
+- ⑫ 成品幻灯片：`.pdf`/`.pptx` 拷进 `build/prebuilt/`、**旁车 `.md` 不被拷走**、与 deck
+  **混排**后的卡片总数与全局顺序（最新在前）、产物里没有区块小标题（`<h2>` 为 0）、
+  旁车标题与 PDF `/Title` 生效、源文件删掉后产物同步消失、非 `.pdf`/`.ppt`/`.pptx`
+  必须 `exit 1`；外加 `tools/file-meta.py` 的 PPTX 标题分支单测。②·2 另钉着
+  schedule 触发、deploy 认 schedule、「补传成品幻灯片」步存在
 
 **为什么这个门禁值得存在**：这些守的都是**静默失效**的不变量 —— stamp 基准错了会长期复用
 旧 PDF、`core.quotePath` 会让中文名 deck 永不重编、护栏失效会做出坏链接、失败没 `exit 1`
@@ -411,13 +440,14 @@ bash verify-site.sh --build    # 再加 ①~⑪ 的编译路径（共 150 项）
 - **夹具先做一次快照提交**：`fresh()` 复制完仓库会 `git add -A && commit` 一次。原因是工作树里
   未提交的改动（比如刚 `cp -R` 出来的新 deck）不在 `git diff <基准> HEAD` 里，会让 ② 的
   「复用 N-1」断言假红 —— 本地开发时几乎必然命中。
-- **夹具还要「让每套 deck 都刚刚提交过」**（`fresh()` 里紧接着的一步：给每个 `slides/*/main.typ`
-  追加一行注释并提交）。这是 ①「最近更新标记数 = 套数」的前提，**不能靠真实历史**：上面那次
-  快照提交在**干净工作树**（＝CI 检出的状态）上是空操作（`nothing to commit`，被 `|| true` 吞掉），
-  夹具于是继承真实提交日期 → 某套 deck 超过 RECENT_DAYS 没动过的那天起 ① 突然变红 → verify 失败
-  → `build: needs: verify` 把部署与发版一起卡死（独立复核实测：所有 deck 改成 20–25 天前、
-  工作树干净 → 期望 [2] 实际 [0]，98 通过 / 1 失败；补上后 109 通过 / 0 失败）。
-  **任何「夹具依赖当前时间/真实历史」的断言都要先想这件事**（完整记录见 docs/gate-design.md）。
+- **（历史）夹具曾「让每套 deck 都刚刚提交过」**：`fresh()` 里曾经紧接着快照再给每个
+  `slides/*/main.typ` 追加一行注释并提交。那是 ①「最近更新标记数 = 套数」的前提，**不能靠
+  真实历史**：快照提交在**干净工作树**（＝CI 检出的状态）上是空操作（`nothing to commit`，
+  被 `|| true` 吞掉），夹具于是继承真实提交日期 → 某套 deck 超过窗口没动过的那天起 ① 突然
+  变红 → verify 失败 → `build: needs: verify` 把部署与发版一起卡死（独立复核实测：所有 deck
+  改成 20–25 天前、工作树干净 → 期望 [2] 实际 [0]，98 通过 / 1 失败；补上后 109 通过 / 0 失败）。
+  圆点与该断言已于 2026-11 一并移除，这步也随之删除。教训保留：**任何「夹具依赖当前时间/
+  真实历史」的断言都要先想这件事**（完整记录见 docs/gate-design.md）。
 - **每次运行用独立临时目录**（`TMP="$(mktemp -d …)"` + `trap` 清理），不再写死 `/tmp/slides-verify`：
   写死时两个并发运行（本地跑一遍的同时另一个 agent 也在跑、或 CI 与本地同时跑）会互相
   `rm -rf` 掉对方的 `$TMP`，症状是后面莫名其妙的 `exit 127`、断言乱飞 —— 本轮真踩过，
@@ -456,9 +486,8 @@ bash verify-site.sh --build    # 再加 ①~⑪ 的编译路径（共 150 项）
 - 顺带：脚本里所有夹具提交都走 `gitc()`（`git -c commit.gpgsign=false -c user.email=… -c user.name=… commit`），
   既不依赖 runner 上有 git 身份配置，也不怕开发机全局开了 `commit.gpgsign`（很常见的配置）——
   开了签名时夹具的 `commit` 会 rc=128 失败、被 `|| true` 吞掉，于是夹具 HEAD 不前进，
-  ①（圆点=套数）、②（复用 N-1）、②b、⑩ 一起假红，报错还分别指向 `core.quotePath`、
+  ①、②（复用 N-1）、②b、⑩ 一起假红，报错还分别指向 `core.quotePath`、
   排序键这些**完全无关**的子系统（实测：全局 gpgsign 下 93 通过 / 5 失败）。
-  `fresh()` 里另外显式比较了「刚刚提交」前后的 HEAD，没前进就当场 `bad`，把原因指到夹具初始化上。
 - **夹具里不要写死某套 deck 的名字**（同一个教训的第三次）：③ 的「其余 PDF 保留」曾经写死
   `26-09-30`、④ 曾经往 `slides/26-09-30/main.typ` 写坏内容，作者哪天把日期型 deck 改名/归档
   （§3.8：改名等于换 URL）就会打出 3 条假红 FAIL，报错分别指向清理逻辑与编译失败检测。
