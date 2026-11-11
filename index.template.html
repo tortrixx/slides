@@ -116,6 +116,14 @@
       html.dark {
         color-scheme: dark;
       }
+      /* 主题切换的整页过渡（View Transitions）：点击按钮切主题时，JS 用
+         document.startViewTransition 包住换主题的 DOM 变更，浏览器把新旧两张
+         整页快照交叉淡化，颜色不再瞬间跳变。时长 0.3s 与页面其它动效同档。
+         不支持该 API 的浏览器忽略这两条、JS 也会直接硬切，等同没有这段。 */
+      ::view-transition-old(root),
+      ::view-transition-new(root) {
+        animation-duration: 0.3s;
+      }
       /* 上面两条是「跟随系统/无 JS」时的兜底；用户手动切过之后，JS 会用行内
          color-scheme（优先级更高）把它改成实际主题 */
 
@@ -498,6 +506,9 @@
         font-weight: 500;
         letter-spacing: -0.01em;
         line-height: 1.35;
+        /* 标题折行时两行长度尽量均衡（text-wrap 是继承属性，会传到标题文本；
+           不支持的浏览器忽略它、按原样折行）。主要受益的是窄屏与长标题。 */
+        text-wrap: balance;
         /* inline-flex 的宽度上限要显式给，否则长标题按 min-content 撑开（配 .deck-main 的
            overflow-wrap 一起用） */
         max-width: 100%;
@@ -527,6 +538,8 @@
         margin-top: 0.375rem;
         font-size: 0.875rem;
         line-height: 1.55;
+        /* 避免末行只剩一两个字的孤行（不支持的浏览器忽略，渐进增强） */
+        text-wrap: pretty;
         color: hsl(var(--muted-foreground));
         transition: color 0.3s ease;
       }
@@ -668,6 +681,12 @@
           transform: none;
           filter: none;
         }
+        /* 主题切换的整页过渡在该偏好下由 JS 直接不启动（见 head 脚本），
+           这里再把过渡动画本身关掉，双保险 */
+        ::view-transition-old(root),
+        ::view-transition-new(root) {
+          animation: none;
+        }
         /* 关掉动画后光带会定格成一个色块，不如直接不显示 */
         .beam {
           display: none;
@@ -703,6 +722,10 @@
         var query = window.matchMedia
           ? window.matchMedia("(prefers-color-scheme: dark)")
           : { matches: false, addEventListener: null, addListener: null };
+        // 同样的桩法：没有 matchMedia 时按「未要求减少动效」处理
+        var reduceMotion = window.matchMedia
+          ? window.matchMedia("(prefers-reduced-motion: reduce)")
+          : { matches: false };
         var mode = "auto";
         try {
           var saved = localStorage.getItem("theme");
@@ -757,6 +780,17 @@
           apply(mode === "auto" ? query.matches : mode === "dark");
           syncButton(document.getElementById("themeToggle"));
         }
+        // 点击切换专用：支持 View Transitions 且用户没要求减少动效时，把换主题
+        // 包进 startViewTransition，整页交叉淡化；否则直接硬切（原行为）。
+        // 只包点击这一条路径：首屏那次在首次绘制前执行、不能包；系统主题变化是
+        // 被动跟随，也不必包。
+        function followSystemAnimated() {
+          if (!document.startViewTransition || reduceMotion.matches) {
+            followSystem();
+            return;
+          }
+          document.startViewTransition(followSystem);
+        }
 
         followSystem();
 
@@ -773,7 +807,7 @@
             if (mode === "auto") localStorage.removeItem("theme");
             else localStorage.setItem("theme", mode);
           } catch (e) {}
-          followSystem();
+          followSystemAnimated();
         });
 
         // 这段脚本在 <head> 里执行，此时按钮还没解析出来，等 DOM 就绪再对齐它的状态
