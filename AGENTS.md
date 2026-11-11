@@ -292,7 +292,8 @@ Noto Sans CJK / Inter（2026-10-17 独立复核指出：旧文档写「钉住后
   表面色 + 发丝边框 + 分层阴影，hover 上浮；别再加封面/缩略图，也别退回行间分隔线版式）；
   字重 `500`（**别写 600**）；整卡可点用 stretched-link
   （别加第二个链接）；主题三态 auto/light/dark 且
-  `apply(mode === "auto" ? query.matches : mode === "dark")`；装饰 SVG 一律 `aria-hidden`；
+  `apply(mode === "auto" ? query.matches : mode === "dark")`；点击切主题走 View Transitions
+  整页交叉淡化（仅点击路径；不支持该 API 或 `prefers-reduced-motion` 时硬切，等同原行为）；装饰 SVG 一律 `aria-hidden`；
   动效保留 `@supports` 与 `prefers-reduced-motion`（该偏好下除了淡入与光带，还要关掉
   `.avatar` / `.deck-title` / `.ext` 的 transition）；背景设在 `html`，
   **`body` 上不能再写 background**；页脚靠 flex 压底、不用 `position: fixed`。
