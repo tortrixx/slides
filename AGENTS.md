@@ -195,7 +195,6 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
 | `release: published` | 只给该 Release 补/覆盖附件，不动说明 |
 | `pull_request` | 只跑 verify + build（门禁 + 试编译）；不部署、不发版、不走增量缓存（全量编译） |
 | `workflow_dispatch` | 手动：选 `main` 则编译+部署；不发版 |
-| `schedule`（每天 03:23 CST） | 编译 + 部署；**不发版**。存在的理由：页脚时间戳是构建时间，只靠 push 触发会停在上次构建（看着像没人维护）——每天重建一次让它保持新鲜。门禁 ②·2 钉着 schedule 与 deploy 的 if |
 
 ### 四个 job
 
@@ -203,7 +202,7 @@ Typst + Touying 幻灯片仓库。每套幻灯片是 `slides/` 下的一个独�
 | --- | --- | --- | --- |
 | `verify` | `github.event.deleted != true` | 默认（`contents: read`） | 门禁：跑 `verify-site.sh --build`（①~⑫ + Release/tag 逻辑），失败则后面全部不执行 |
 | `build` | `github.event.deleted != true` | `contents: read` | 装字体（复合 action）→ 增量编译 → 生成导航页 → 上传两份产物 |
-| `deploy` | `github.event.deleted != true` **且** `refs/heads/main` 的 push、手动或定时 | `pages: write`, `id-token: write` | `actions/deploy-pages` 发布 `build/` |
+| `deploy` | `github.event.deleted != true` **且** `refs/heads/main` 的 push 或手动 | `pages: write`, `id-token: write` | `actions/deploy-pages` 发布 `build/` |
 | `release` | `github.event.deleted != true` 且（main push / 推送 tag / release 事件） | `contents: write` | 计算 tag → 写说明 → 建/更新 Release |
 
 `deploy` 用固定的 `pages` concurrency group；`release` 用 `release-<tag>`（main push 时即
@@ -265,7 +264,9 @@ Noto Sans CJK / Inter（2026-10-17 独立复核指出：旧文档写「钉住后
   后者 `basename` 会吃掉换行）；字符集护栏见 §3.8。
 - **导航页**：`index.template.html` + awk 按行替换三处占位（`SLIDES` / `COUNT` / `META`）；
   **占位符原文绝不能出现在模板里**；`COUNT` 现在没用（套数已去掉），替换规则留着。
-  页脚只放「更新于 …」时间戳（**别再加回「全部 PDF」链接**）。顺序＝按
+  页脚只放「最近更新 <日期>」（全部条目 git 最后提交日期的最大值，与排序同源；
+  **别再加回「全部 PDF」链接**；也别改回构建时间——那需要 schedule 定时重建保鲜，
+  已于 2026-11 删除，门禁 ②·2 反向钉着无 schedule）。顺序＝按
   `git log -1 --format=%cs` 倒序、同日按名字升序、无日期排最后（`LC_ALL=C`，**别退回 glob 顺序**），
   日期不上页面；`count` 必须显式兜底（process substitution 的退出码不参与 `set -e`）；
   checkout 必须 `fetch-depth: 0`。卡片数据：标题/副标题由 `tools/deck-meta.py` 取**行序第一个**
@@ -371,7 +372,7 @@ bash verify-site.sh --build    # 再加 ①~⑫ 的编译路径（共 155 项）
 记录与手工核对流程见 docs/gate-design.md，这里只留索引：
 
 - ① 冷启动全量：产出 PDF 数、`.build-stamp`、首页卡片数、`icon.png` 进 `build/`、
-  页脚时间戳已注入、三个占位注释（SLIDES/COUNT/META）在产物里零残留、
+  页脚「最近更新」日期（= 全部条目 git 日期最大值，门禁按夹具历史同口径算期望值比对）、三个占位注释（SLIDES/COUNT/META）在产物里零残留、
   **产物里的 HTML 注释成对 + 卡片在注释之外**（漏写 `-->` 或把注入点包进注释时，
   「卡片数」这条照样绿，但浏览器一张都看不到 —— 两种坏法要两条断言分别钉）
 - ①b HTML 转义：标题含 `& < >` 的 deck，产物必须是实体、没有原始标签
@@ -415,7 +416,7 @@ bash verify-site.sh --build    # 再加 ①~⑫ 的编译路径（共 155 项）
   **混排**后的卡片总数与全局顺序（最新在前）、产物里没有区块小标题（`<h2>` 为 0）、
   旁车标题与 PDF `/Title` 生效、源文件删掉后产物同步消失、非 `.pdf`/`.ppt`/`.pptx`
   必须 `exit 1`；外加 `tools/file-meta.py` 的 PPTX 标题分支单测。②·2 另钉着
-  schedule 触发、deploy 认 schedule、「补传成品幻灯片」步存在
+  无 schedule 触发、deploy 不认 schedule、「补传成品幻灯片」步存在
 
 **为什么这个门禁值得存在**：这些守的都是**静默失效**的不变量 —— stamp 基准错了会长期复用
 旧 PDF、`core.quotePath` 会让中文名 deck 永不重编、护栏失效会做出坏链接、失败没 `exit 1`
