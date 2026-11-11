@@ -31,14 +31,6 @@ on:
   # 天然排除 PR；build 在 PR 上不恢复增量缓存（恢复步只认 main push），退化为全量编译，结果不变。
   pull_request:
   workflow_dispatch: # 支持在 Actions 页面手动运行（只构建/部署，不发版本）
-  schedule:
-    # 每天定时重建 + 重新部署（不发版，release job 的 if 不认 schedule 事件）。
-    # 为什么还在：页脚时间戳是构建时间，只靠 push 触发的话，长时间不推送它就停在
-    # 几周前，看着像站点没人维护。每天重建一次，它就不会过期。（历史上这里还有个
-    # 更强的理由——首页「最近更新」圆点的窗口是构建时按相对时间算的，不重建就说谎；
-    # 圆点已于 2026-11 移除，排序本身已表达新旧，见 docs/site-design.md。）
-    # cron 是 UTC：19:23 UTC = 次日 03:23（Asia/Shanghai）。
-    - cron: "23 19 * * *"
 
 env:
   # Typst 版本。锁版本可保证构建可复现。
@@ -732,21 +724,35 @@ jobs:
           fi
 
           # ---------- 2) 把生成结果套进模板 ----------
-          # 页脚**只放这个时间戳**（2026-10-17 起又回到这一版）：它是**构建**时间，不是每套幻灯片
-          # 的内容时间（改一套 deck 也会让首页时间戳刷新），所以不配提交号，免得被读成
-          # 「最新内容就是这个提交」。改文案时记得门禁只断言「页脚有一个 YYYY-MM-DD HH:MM」、
-          # 不绑具体措辞。
+          # 页脚**只放这一行**（2026-10-17 起）：现在放的是**内容**的最近更新日期 ——
+          # 列表里全部条目（deck 与成品幻灯片）git 最后提交日期的最大值，与排序同源
+          # （就是上面那份 TSV 的第一列；占位日期 0000-00-00 天然垫底，全是占位值时页脚留空）。
+          # 它不是构建时间：内容没动它就停在那天，那是事实、不算过期，所以不再需要
+          # 定时重建给页脚保鲜 —— `schedule` 已于 2026-11 删除、deploy 的 if 也不再认
+          # schedule（门禁 ②·2 反向钉着这两点，别加回来）。更早的版本在这里放构建时间，
+          # 还为它保留过每日重建，两个时间混在一起的教训见 docs/ci-design.md。
+          # 门禁 ① 会按夹具历史同口径算出期望日期、与页脚逐字比对，改口径先改门禁。
           # 曾经在这里放过一个「全部 PDF」链接（指向 releases/latest，release job 汇总了全部 PDF）；
           # 用户 2026-10-17 要求去掉 —— 顶栏右上角已经有 GitHub 图标，进仓库就能看到 Releases，
           # 页脚再来一个是重复入口。**别再把它加回来**（门禁里那条断言也一起删了）。
           # **注意**：若以后真往这里塞 HTML，`awk` 的 `sub()` 替换串里 `&` 表示「匹配到的文本」，
           # 文案里不能出现 `&`（要写就写 `\&`）。
-          # 消费者必须用与校验步**完全相同**的兜底（`${RELEASE_TZ:-Asia/Shanghai}`）：
+          # `RELEASE_TZ` 的消费者（现在只剩 release job 算 tag 那步）必须用与校验步
+          # **完全相同**的兜底（`${RELEASE_TZ:-Asia/Shanghai}`）：
           # 校验步把「未设置/空串」归一化成默认值再检查，而 `TZ=""` 不是「系统默认」而是 **UTC**
           # —— 两边写法不一致时，`RELEASE_TZ` 一旦被删成空，校验会打印默认值并放行、
           # 消费者却按 UTC 算日期，CST 00:00–08:00 的 push 会发到**前一天**的 Release
-          # （2026-10-17 独立复核发现；现在两个消费者都写全兜底）。
-          meta="更新于 $(TZ="${RELEASE_TZ:-Asia/Shanghai}" date '+%Y-%m-%d %H:%M')"
+          # （2026-10-17 独立复核发现；原先页脚也是消费者，改用内容日期后已不用 TZ，
+          # 这段留在离 tag 消费者最近的这一步，别当无用注释删掉）。
+          newest="$(awk -F '\t' '{ if ($1 > max) max = $1 } END { print max }' "$deck_list")"
+          # 全部条目都拿不到日期（无 git 历史的本地副本等）时页脚留空：CI 里 checkout
+          # 带完整历史、条目必然已提交，走不到这里；为这种退化情形 exit 1，等于把
+          # 「日期只是排序/展示数据」的既有口径（占位日期垫底、不 fail）升级成硬失败。
+          if [ -n "$newest" ] && [ "$newest" != "0000-00-00" ]; then
+            meta="最近更新 ${newest}"
+          else
+            meta=""
+          fi
 
           awk -v items="$items" -v count="$count" -v meta="$meta" '
             /<!--SLIDES-->/ { while ((getline line < items) > 0) print line; close(items); next }
@@ -776,7 +782,7 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # 2) 部署到 GitHub Pages
-  #    只在 main 分支的 push / 手动运行 / 每日定时（且手动运行时也选的 main）才部署；
+  #    只在 main 分支的 push / 手动运行（且手动运行时也选的 main）才部署；
   #    tag 推送和 release 事件只发版本，不动线上站点。
   # ---------------------------------------------------------------------------
   deploy:
@@ -785,7 +791,7 @@ jobs:
     # deleted 防护对齐 verify/build/release 三个 job（2026-10-17 加）：当前虽无实际触发路径
     # （删除分支会带着 build 一起被跳过；删 tag 时 github.ref 不是 refs/heads/main），
     # 但它是唯一一个**能在 push 事件上跑却又没这道防护**的 job，属于防线不对称。
-    if: github.event.deleted != true && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
+    if: github.event.deleted != true && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-24.04
     # 上限：部署本身很快，卡住通常是 Pages 侧问题，别让它占满默认 6 小时
     timeout-minutes: 10
