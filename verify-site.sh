@@ -157,14 +157,14 @@ chk "②·2 build 有 slides-build-<ref> 的 concurrency 且 cancel-in-progress"
     "$(wfq 'c=(YAML.load_file(ARGV[0])["jobs"]["build"]["concurrency"]||{}); print((c["group"].to_s.include?("slides-build-") && c["cancel-in-progress"]==true) ? "ok" : c.inspect)')" "ok"
 chk "②·2 deploy 的 permissions 有 pages: write + id-token: write" \
     "$(wfq 'p=YAML.load_file(ARGV[0])["jobs"]["deploy"]["permissions"]||{}; print((p["pages"]=="write" && p["id-token"]=="write") ? "ok" : p.inspect)')" "ok"
-# 定时重建（schedule）让页脚的构建时间戳定期刷新：它只靠 push 触发时，长时间不推送
-# 就会停在几周前。删掉 schedule 或让 deploy 不认它，失效是静默的 —— 首页照常打开，
-# 只是时间戳慢慢变旧，所以在结构层钉住。
+# 页脚显示的是内容的最近更新日期（不随构建时间变），定时重建已于 2026-11 删除：
+# 加回 schedule 或让 deploy 的 if 认它，等于把「每天重建一次给构建时间戳保鲜」的
+# 已废弃机制带回来 —— 失效是静默的（站点照常，只是每天白跑一遍），所以反向钉住。
 # 注意 Ruby 的 YAML 解析会把 `on:` 的键读成布尔 true（YAML 1.1），两个键都要试。
-chk "②·2 workflow 带 schedule 定时触发（页脚时间戳靠它定期刷新）" \
-    "$(wfq 'wf=YAML.load_file(ARGV[0]); on=wf["on"]||wf[true]||{}; s=on["schedule"]||[]; print(s.any?{|x| x["cron"].to_s.size>0} ? "ok" : s.inspect)')" "ok"
-chk "②·2 deploy 的 if 认 schedule 事件（定时运行要真的部署）" \
-    "$(wfq 'print(YAML.load_file(ARGV[0])["jobs"]["deploy"]["if"].to_s.include?("schedule") ? "ok" : "missing")')" "ok"
+chk "②·2 workflow 没有 schedule 定时触发（页脚已改内容日期，不需要每日重建）" \
+    "$(wfq 'wf=YAML.load_file(ARGV[0]); on=wf["on"]||wf[true]||{}; print(on.key?("schedule") ? on["schedule"].inspect : "ok")')" "ok"
+chk "②·2 deploy 的 if 不认 schedule 事件（与无 schedule 触发对齐）" \
+    "$(wfq 'print(YAML.load_file(ARGV[0])["jobs"]["deploy"]["if"].to_s.include?("schedule") ? "present" : "ok")')" "ok"
 # 「补传成品幻灯片」步必须存在：两个 PDF 发布分支都不带 prebuilt/，少了这步成品幻灯片
 # 就只有站点有、Release 附件里没有（静默缺失，push 时没人会发现）。
 FILEUP=""
@@ -451,16 +451,32 @@ chk "① 站点资源 icon.png 已进 build/" "$([ -f "$R/build/icon.png" ] && e
 # 不加的话 `bash -e verify-site.sh` 会在这里无声中止（脚本顶部 capture 的注释讲的就是这件事）。
 left="$(grep -oE '<!--(SLIDES|COUNT|META)-->' "$R/build/index.html" | paste -sd' ' - || true)"
 chk "① 占位注释已全部消费（产物里没有残留）" "$left" ""
-# 断言**页脚区里出现一个 YYYY-MM-DD HH:MM 时间戳**，而不是某句固定文案：文案是随时会改的
-# 展示措辞（「最后更新」→「更新于」，2026-10 改），钉死它只会制造假红 —— 实测只改那句文案
-# 就 85 通过 / 1 失败，报的还是「META 可能被改名/拼错」，把排查引向错误的方向。
+# 断言页脚是「最近更新 <日期>」、且日期恰好等于全部条目 git 最后提交日期的最大值。
+# 页脚的语义 2026-11 从构建时间改成内容日期：它声称的若不是内容日期（比如有人改回
+# 构建时间、或最大值算错），这条就要红 —— 这正是要钉的，所以这次**逐字比对**，
+# 不像旧断言只看格式（旧教训「钉文案制造假红」针对的是纯展示措辞，这里的日期是数据）。
+# 期望值按 workflow 的同口径从夹具自己的历史算（deck 看目录且要有产物 PDF、成品看
+# 文件、跳过旁车 .md），**不用运行当天的日期** —— 夹具依赖当前时间是假红的老坑
+# （见 AGENTS.md 里圆点断言的教训）；fresh() 的快照提交会碰全部路径，两边同源。
 # 占位符真被改名时页脚里会剩下 `<!--META-->`（上面那条残留 grep 也钉着），这条照样红。
-# 用 here-string 而不是 `printf '%s' "$x" | grep -q`：脚本是 `set -uo pipefail`，数据一大、grep
-# 提前退出就会让 printf 吃 EPIPE、整条管道变非零，把「匹配成功」判成失败（见 §7 那条坑）。
 footer_html="$(sed -n '/<footer/,/<\/footer>/p' "$R/build/index.html")"
-if grep -qE '[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}' <<<"$footer_html"; then
-  ok "① 页脚时间戳已注入（META 占位符生效）"
-else bad "① 页脚没有 YYYY-MM-DD HH:MM 时间戳：META 占位符被改名/拼错，或时间格式被改了"; fi
+footer_text="$(grep -oE '最近更新 [0-9]{4}-[0-9]{2}-[0-9]{2}' <<<"$footer_html" || true)"
+want_date=""
+for dir in "$R"/slides/*/; do
+  [ -f "${dir}main.typ" ] || continue
+  [ -e "$R/build/$(basename "$dir").pdf" ] || continue
+  d="$(git -C "$R" log -1 --format=%cs -- "slides/$(basename "$dir")" || true)"
+  if [ -n "$d" ] && [ "$d" \> "$want_date" ]; then want_date="$d"; fi
+done
+for f in "$R"/prebuilt/*; do
+  [ -f "$f" ] || continue
+  case "$f" in *.md) continue ;; esac
+  d="$(git -C "$R" log -1 --format=%cs -- "prebuilt/$(basename "$f")" || true)"
+  if [ -n "$d" ] && [ "$d" \> "$want_date" ]; then want_date="$d"; fi
+done
+if [ -n "$want_date" ] && [ "$footer_text" = "最近更新 ${want_date}" ]; then
+  ok "① 页脚是最近内容更新日期（META 占位符生效，日期 = 条目最大值 ${want_date}）"
+else bad "① 页脚应为「最近更新 ${want_date}」，实际「${footer_text:-无}」：META 占位符被改名/拼错，或最近更新日期的口径被改了"; fi
 # ①b HTML 转义：title/subtitle 来自可编辑的 main.typ，转义护栏一旦回归就会在站点上执行注入。
 # 造一个带 & < > 的标题，断言产物里是实体、且没有原始标签。
 R7="$TMP/repo-escape"; fresh "$R7"
@@ -701,7 +717,7 @@ order="$(grep -o 'href="[^"]*\.pdf"' "$R10/build/index.html" | sed 's/href="//;s
 chk "⑩ 顺序＝最新在前（日期倒序、同日按名字升序、无日期排最后）" \
     "$order" "mm-same.pdf zz-new.pdf aa-old.pdf mm-nodate.pdf"
 # 正面断言：**卡片区**里不该出现任何 YYYY-MM-DD 形态的文本（日期只用于排序）。
-# 注意不能直接整页 grep —— 页脚的「更新于 2026-…」本身就是一个日期，而且它在 <main> 之外。
+# 注意不能直接整页 grep —— 页脚的「最近更新 2026-…」本身就是一个日期，而且它在 <main> 之外。
 # 先钉区间非空：`<main>` 一旦被改名（比如换成 `<div class="content">`），sed 区间为空、下面的
 # 日期 grep 永远不匹配，这条断言就会**空过并打印 ok**（2026-10-17 实测；同文件里页脚那条同型
 # 断言是 fail-closed 的，两条行为不一致，容易被误以为都安全）。
